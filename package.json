@@ -1,0 +1,13 @@
+{
+  "name": "kopipe",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint": "eslint core",
+    "test": "node tests/golden.mjs && node tests/ks-ref.mjs && node tests/artemis-ref.mjs && node tests/psb-ref.mjs && node tests/project.mjs && node tests/zip.mjs"
+  },
+  "devDependencies": {
+    "eslint": "^9.17.0"
+  }
+}

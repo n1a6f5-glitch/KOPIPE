@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0d1326"/>
+      <stop offset="45%" stop-color="#1b1f3b"/>
+      <stop offset="80%" stop-color="#3b2645"/>
+      <stop offset="100%" stop-color="#5c2c45"/>
+    </linearGradient>
+    <linearGradient id="sunGlow" x1="0.7" y1="0.2" x2="0.2" y2="0.9">
+      <stop offset="0%" stop-color="#f59e0b" stop-opacity="0.38"/>
+      <stop offset="50%" stop-color="#ec4899" stop-opacity="0.16"/>
+      <stop offset="100%" stop-color="#0d1326" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="charGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2a243b"/>
+      <stop offset="50%" stop-color="#1b1828"/>
+      <stop offset="100%" stop-color="#0b0d14"/>
+    </linearGradient>
+    <linearGradient id="rimLight" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#fbbf24" stop-opacity="0.75"/>
+      <stop offset="100%" stop-color="#fbbf24" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="bokeh" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0%" stop-color="#fde68a" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#fde68a" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <!-- Twilight Sky -->
+  <rect width="1920" height="1080" fill="url(#sky)"/>
+  <rect width="1920" height="1080" fill="url(#sunGlow)"/>
+  <!-- Distant City / School Rooftop Silhouette -->
+  <path d="M0 780 L180 780 L180 690 L290 690 L290 740 L430 740 L430 620 L580 620 L580 760 L780 760 L780 660 L940 660 L940 790 L1920 790 L1920 1080 L0 1080 Z" fill="#0d101d" opacity="0.65"/>
+  <!-- Window Frame / Classroom Perspective Lines -->
+  <g stroke="#ffffff" stroke-opacity="0.07" stroke-width="2" fill="none">
+    <line x1="0" y1="180" x2="1920" y2="180"/>
+    <line x1="0" y1="780" x2="1920" y2="780"/>
+    <line x1="420" y1="0" x2="420" y2="1080"/>
+    <line x1="960" y1="0" x2="960" y2="1080"/>
+    <line x1="1500" y1="0" x2="1500" y2="1080"/>
+  </g>
+  <!-- Diagonal Sunlight Beams -->
+  <polygon points="650,0 1150,0 520,1080 120,1080" fill="#fbbf24" opacity="0.045"/>
+  <polygon points="1050,0 1420,0 890,1080 560,1080" fill="#f472b6" opacity="0.035"/>
+  <!-- Bokeh Light Particles -->
+  <circle cx="340" cy="320" r="64" fill="url(#bokeh)"/>
+  <circle cx="680" cy="240" r="42" fill="url(#bokeh)"/>
+  <circle cx="520" cy="540" r="85" fill="url(#bokeh)"/>
+  <circle cx="920" cy="390" r="50" fill="url(#bokeh)"/>
+  <circle cx="1140" cy="280" r="70" fill="url(#bokeh)"/>
+  <circle cx="820" cy="680" r="45" fill="url(#bokeh)"/>
+  <!-- Visual Novel Heroine Silhouette (Right Foreground) -->
+  <g transform="translate(1160, 125)">
+    <!-- Flowing Long Hair Back -->
+    <path d="M260 95 C150 110, 80 240, 45 430 C15 580, -20 740, -55 955 L540 955 C515 730, 485 520, 445 340 C410 190, 345 100, 260 95 Z" fill="#141322" opacity="0.92"/>
+    <!-- Hair Ribbon / Twin-tail Accent -->
+    <path d="M365 135 C430 105, 510 140, 545 220 C485 215, 430 235, 395 275 Z" fill="#f59e0b" opacity="0.65"/>
+    <!-- Head & Anime Profile Contour -->
+    <path d="M250 85 C185 85, 145 135, 145 205 C145 255, 168 300, 205 322 L212 368 L135 415 C95 440, 68 510, 52 620 L38 955 L465 955 L440 600 C425 495, 395 435, 345 410 L282 368 L288 320 C330 295, 355 250, 355 198 C355 130, 310 85, 250 85 Z" fill="url(#charGrad)" stroke="#fbbf24" stroke-opacity="0.35" stroke-width="2.5"/>
+    <!-- Sailor Collar & Ribbon Detail -->
+    <path d="M145 412 L248 535 L350 412" fill="none" stroke="#38bdf8" stroke-opacity="0.45" stroke-width="4"/>
+    <path d="M158 430 L248 552 L338 430" fill="none" stroke="#38bdf8" stroke-opacity="0.25" stroke-width="2"/>
+    <polygon points="248,525 212,615 248,595 284,615" fill="#f43f5e" opacity="0.75"/>
+    <!-- Soft Rim Highlight on Hair & Shoulder -->
+    <path d="M148 185 C135 245, 110 330, 65 445" fill="none" stroke="#fbbf24" stroke-opacity="0.55" stroke-width="3.5" stroke-linecap="round"/>
+  </g>
+</svg>

@@ -1,0 +1,5 @@
+node_modules/
+# third-party reference sources + built dumper (license unknown -> not redistributed)
+tests/ref/psb.cpp
+tests/ref/psb.hpp
+tests/ref/dump
