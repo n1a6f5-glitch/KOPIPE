@@ -2,6 +2,7 @@
 import { uid } from './db.js';
 import { importScript, exportScript } from './engines/index.js';
 import { LINE_RE, parseBatchUnified, formatBatchLine, formatFileHeader, padGlobalId, detectEntryKind, isNarrationSpeaker } from './batch.js';
+export { isNarrationSpeaker };
 import { sortGls } from './util.js';
 import { analyzeTagSafety, stripTagsForAi, fixTags, validate, glossaryRules, CRIT_TYPES } from './qc.js';
 import { matchVndb, buildGls } from './vndb.js';
@@ -406,6 +407,25 @@ export async function updateFileSource(store, fid, bytes, opts = {}) {
   await touch(store, p);
   getCache(store, f.pid).files = null;
   return { file: f, count: newEntries.length, kept, skipped: ex.skipped || [], log: logJson };
+}
+
+export async function removeAllFiles(store, pid) {
+  const p = await ensureMigrated(store, pid);
+  await store.deleteWhere("entries", "pid", pid);
+  const files = await store.where("files", "pid", pid);
+  for (const f of files) {
+    try { await store.delete("blobs", f.id); } catch (e) { /* ignore */ }
+  }
+  await store.deleteWhere("files", "pid", pid);
+  const c = getCache(store, pid);
+  c.files = [];
+  if (p) {
+    p.stats = emptyStats();
+    p.nextGid = 1;
+    p.nextOrder = 1;
+    delete p.lastUndo;
+    await touch(store, p);
+  }
 }
 
 export async function removeFile(store, fid) {

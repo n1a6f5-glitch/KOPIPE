@@ -35,7 +35,13 @@ const copyText = async (txt) => {
 };
 
 const STAT_LABEL = { todo: 'Untranslated', draft: 'Draft', done: 'Done', flag: 'Flagged' };
-const KIND_BADGE = { dialog: 'Dialog', narasi: 'Narration' };
+const KIND_BADGE = { dialog: 'Dialog', narasi: 'Narration', D: 'Dialog', N: 'Narration' };
+
+function isEntryDialogue(entry) {
+  if (!entry) return false;
+  if (entry.name && !P.isNarrationSpeaker(entry.name)) return true;
+  return entry.kind === 'dialog' || entry.kind === 'D';
+}
 const QC_TYPE_LABEL = {
   tag: 'Tag Mismatch',
   tag_malformed: 'Malformed Tag',
@@ -77,11 +83,15 @@ function applyBgConfig() {
   const mode = lsGet('kopipe.bgMode') || 'default';
   const custom = lsGet('kopipe.bgCustom') || '';
   const dim = lsGet('kopipe.bgDim') || '0.76';
+  const stageH = lsGet('kopipe.stageH') || '280px';
+  const bgPos = lsGet('kopipe.bgPos') || '22%';
   const rootStyle = document.documentElement.style;
   if (mode === 'none') rootStyle.setProperty('--bg-img', 'none');
   else if (mode === 'custom' && custom) rootStyle.setProperty('--bg-img', `url("${custom}")`);
   else rootStyle.setProperty('--bg-img', "url('icons/vn-bg.svg')");
   rootStyle.setProperty('--bg-dim', dim);
+  rootStyle.setProperty('--stage-h', stageH);
+  rootStyle.setProperty('--bg-pos', bgPos);
 }
 applyBgConfig();
 
@@ -310,8 +320,8 @@ async function renderEdit(v) {
 
   updatePreviewFn = (entry, liveTgt, liveSpeaker) => {
     if (!entry) return;
-    const isDialog = entry.kind === 'dialog' && entry.name && entry.name !== 'Narasi';
-    const spk = (liveSpeaker && liveSpeaker.trim()) || entry.tgtName || (isDialog ? entry.name : 'NARRATION');
+    const isDialog = isEntryDialogue(entry);
+    const spk = (liveSpeaker && liveSpeaker.trim()) || entry.tgtName || (isDialog ? (entry.name && !P.isNarrationSpeaker(entry.name) ? entry.name : 'DIALOGUE') : 'NARRATION');
     vnPlate.textContent = spk;
     vnPlate.className = 'vn-nameplate' + (isDialog ? '' : ' narasi');
     const formatted = formatVnPreviewText(liveTgt !== undefined ? liveTgt : entry.tgt, entry.src);
@@ -395,10 +405,11 @@ async function renderEdit(v) {
 function card(e) {
   let timer, cur = e;
   const hasTags = /<T\d+>/.test(e.src);
+  const isDialog = isEntryDialogue(e);
   const st = h('span', { class: 'st' }, STAT_LABEL[e.status] || e.status);
   const note = h('div', { class: 'note' }, e.note || '');
   const ta = h('textarea', {
-    placeholder: e.kind === 'dialog' ? 'Dialogue translation...' : 'Narration translation...',
+    placeholder: isDialog ? 'Dialogue translation...' : 'Narration translation...',
     rows: Math.max(2, Math.min(6, Math.ceil(e.src.length / 48)))
   });
   ta.value = S.hideTagsInEdit && hasTags ? P.stripAllTagsForAi(e.tgt) : e.tgt;
@@ -449,7 +460,8 @@ function card(e) {
   });
   const src = h('div', { class: 'src' }, srcNodes(e.src, S.hideTagsInEdit));
   src.addEventListener('click', ev => { const t = ev.target.dataset && ev.target.dataset.tag; if (t) { const p = ta.selectionStart ?? ta.value.length; ta.setRangeText(t, p, ta.selectionEnd ?? p, 'end'); ta.focus(); ta.dispatchEvent(new Event('input')); } });
-  const kClass = e.kind === 'dialog' ? 'k-dialog' : 'k-narasi';
+  const kClass = isDialog ? 'k-dialog' : 'k-narasi';
+  const kLabel = isDialog ? 'Dialog' : 'Narration';
   const fixTagBtn = (!S.hideTagsInEdit && hasTags) ? h('button', {
     class: 'sm',
     title: 'Automatically reattach <T#> tags from source',
@@ -463,7 +475,7 @@ function card(e) {
     h('div', { class: 'h' },
       e.name && e.name !== 'Narasi' ? h('span', { class: 'spk-badge' }, e.name) : null,
       h('span', { style: 'color:var(--ink)' }, `#${String(e.gid).padStart(6, '0')}`),
-      h('span', { class: 'badge ' + kClass }, KIND_BADGE[e.kind] || e.kind),
+      h('span', { class: 'badge ' + kClass }, kLabel),
       st
     ),
     src,
@@ -1166,7 +1178,21 @@ async function renderFiles(v) {
           download((proj.name.replace(/[^\w.-]+/g, '_') || 'kopipe') + '_translations.txt', new TextEncoder().encode(t), 'text/plain');
         } }, 'Export Translations (.txt)'),
         h('label', { class: 'pill-chk', style: 'margin-left:auto' }, onlyTransChk, 'Translated files only'),
-        hasFsApi ? h('label', { class: 'pill-chk' }, subChk, 'Write to output/') : null
+        hasFsApi ? h('label', { class: 'pill-chk' }, subChk, 'Write to output/') : null,
+        h('button', {
+          class: 'danger sm',
+          title: 'Delete all script files and their translations from this project',
+          onclick: async () => {
+            if (!files.length) return toast('No files to delete');
+            if (confirm(`Warning: Delete all ${files.length} script files and their translations from project "${proj.name}"?\n\nThis action cannot be undone.`)) {
+              await P.removeAllFiles(store, proj.id);
+              markQcDirty();
+              proj = await P.ensureMigrated(store, proj.id);
+              toast(`All ${files.length} files deleted`);
+              await render();
+            }
+          }
+        }, 'Delete All Files')
       )
     ),
     files.length > 4 ? h('div', { class: 'row' }, filterInput) : null,
@@ -1302,12 +1328,33 @@ async function renderSettings(v) {
           };
           reader.readAsDataURL(f);
         } });
+        let stageH = lsGet('kopipe.stageH') || '280px';
+        let bgPos = lsGet('kopipe.bgPos') || '22%';
         const dimSlider = h('input', {
           type: 'range', min: '0.35', max: '0.95', step: '0.03',
           value: lsGet('kopipe.bgDim') || '0.76',
-          style: 'width:110px;padding:0',
+          title: 'Backdrop Dim Level',
+          style: 'width:100px;padding:0',
           oninput: () => { lsSet('kopipe.bgDim', dimSlider.value); applyBgConfig(); }
         });
+        const hGroup = h('div', { class: 'opt-group' });
+        const paintH = () => {
+          hGroup.replaceChildren(
+            ...[['190px', 'Compact (190px)'], ['280px', 'Normal (280px)'], ['380px', 'Theater (380px)']].map(([v, lbl]) =>
+              h('button', { class: 'chip' + (stageH === v ? ' on' : ''), onclick: () => { stageH = v; lsSet('kopipe.stageH', v); applyBgConfig(); paintH(); } }, lbl)
+            )
+          );
+        };
+        paintH();
+        const posGroup = h('div', { class: 'opt-group' });
+        const paintPos = () => {
+          posGroup.replaceChildren(
+            ...[['12%', 'Top Focus'], ['28%', 'Center Focus'], ['55%', 'Bottom Focus']].map(([v, lbl]) =>
+              h('button', { class: 'chip' + (bgPos === v ? ' on' : ''), onclick: () => { bgPos = v; lsSet('kopipe.bgPos', v); applyBgConfig(); paintPos(); } }, lbl)
+            )
+          );
+        };
+        paintPos();
         const paintBg = () => {
           bgGroup.replaceChildren(
             h('button', { class: 'chip' + (bgMode === 'default' ? ' on' : ''), onclick: () => { bgMode = 'default'; lsSet('kopipe.bgMode', 'default'); applyBgConfig(); paintBg(); } }, 'VN Character Scene'),
@@ -1318,10 +1365,20 @@ async function renderSettings(v) {
           );
         };
         paintBg();
-        return h('div', { class: 'cfg-row' },
-          h('div', {}, h('div', { class: 'cfg-lbl' }, 'VN Stage Backdrop & Opacity'), h('div', { class: 'cfg-sub' }, 'Character / CG background behind interface and inside Live VN Box Preview')),
-          bgGroup
-        );
+        return [
+          h('div', { class: 'cfg-row' },
+            h('div', {}, h('div', { class: 'cfg-lbl' }, 'VN Stage Backdrop & Dimming'), h('div', { class: 'cfg-sub' }, 'Character / CG artwork behind interface and inside Live VN Box Preview')),
+            bgGroup
+          ),
+          h('div', { class: 'cfg-row' },
+            h('div', {}, h('div', { class: 'cfg-lbl' }, 'VN Box Preview Stage Height'), h('div', { class: 'cfg-sub' }, 'Vertical room for character sprite & scene framing')),
+            hGroup
+          ),
+          h('div', { class: 'cfg-row' },
+            h('div', {}, h('div', { class: 'cfg-lbl' }, 'VN Stage Camera Focus'), h('div', { class: 'cfg-sub' }, 'Vertical alignment for character face / upper body')),
+            posGroup
+          )
+        ];
       })(),
       h('div', { class: 'cfg-row' },
         h('div', {}, h('div', { class: 'cfg-lbl' }, 'Project Title'), h('div', { class: 'cfg-sub' }, 'Displayed in scene header and exported archives')),

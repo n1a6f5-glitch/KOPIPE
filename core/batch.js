@@ -17,7 +17,7 @@ function isNarrationSpeaker(name){
 function detectEntryKind(name, rawText){
   if(!isNarrationSpeaker(name)) return 'D';
   var clean = (rawText || '').replace(/^(?:<T\d+>|\s)+/, '');
-  if(/^["“「]/.test(clean)) return 'D';
+  if(/^["“「『]/.test(clean)) return 'D';
   return 'N';
 }
 
