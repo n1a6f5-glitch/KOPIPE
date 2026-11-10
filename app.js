@@ -66,7 +66,7 @@ const S = {
   qcPage: 1, qcFilter: 'all', qcTargetMode: 'polish', qcFrom: 1,
   qcRev: 1, qcCache: null,
   fileFilter: '', vntpFilter: false, onlyTranslatedZip: false,
-  writeSubfolder: true, hideTagsInEdit: true, showVnPreview: lsGet('kopipe.preview') !== '0',
+  showVnPreview: lsGet('kopipe.preview') === '1',
   theme: lsGet('kopipe.theme') || 'obsidian',
   collapsedDirs: new Set(), _dirsInit: false, lastSummary: null
 };
@@ -82,7 +82,8 @@ function applyTheme(t) {
 function applyBgConfig() {
   const mode = lsGet('kopipe.bgMode') || 'default';
   const custom = lsGet('kopipe.bgCustom') || '';
-  const dim = lsGet('kopipe.bgDim') || '0.76';
+  const dim = lsGet('kopipe.bgDim') || '0.72';
+  const blur = lsGet('kopipe.bgBlur') || '0px';
   const stageH = lsGet('kopipe.stageH') || '280px';
   const bgPos = lsGet('kopipe.bgPos') || '22%';
   const rootStyle = document.documentElement.style;
@@ -90,6 +91,7 @@ function applyBgConfig() {
   else if (mode === 'custom' && custom) rootStyle.setProperty('--bg-img', `url("${custom}")`);
   else rootStyle.setProperty('--bg-img', "url('icons/vn-bg.svg')");
   rootStyle.setProperty('--bg-dim', dim);
+  rootStyle.setProperty('--bg-blur', blur);
   rootStyle.setProperty('--stage-h', stageH);
   rootStyle.setProperty('--bg-pos', bgPos);
 }
@@ -1324,19 +1326,35 @@ async function renderSettings(v) {
             bgMode = 'custom';
             applyBgConfig();
             paintBg();
-            toast('Custom VN CG backdrop applied');
+            toast('Full-screen wallpaper applied!');
           };
           reader.readAsDataURL(f);
         } });
         let stageH = lsGet('kopipe.stageH') || '280px';
         let bgPos = lsGet('kopipe.bgPos') || '22%';
         const dimSlider = h('input', {
-          type: 'range', min: '0.35', max: '0.95', step: '0.03',
-          value: lsGet('kopipe.bgDim') || '0.76',
-          title: 'Backdrop Dim Level',
-          style: 'width:100px;padding:0',
+          type: 'range', min: '0.20', max: '0.92', step: '0.03',
+          value: lsGet('kopipe.bgDim') || '0.72',
+          title: 'Wallpaper Dim / Darkness',
+          style: 'width:105px;padding:0',
           oninput: () => { lsSet('kopipe.bgDim', dimSlider.value); applyBgConfig(); }
         });
+        const blurSlider = h('input', {
+          type: 'range', min: '0', max: '14', step: '1',
+          value: parseInt(lsGet('kopipe.bgBlur') || '0', 10),
+          title: 'Wallpaper Blur',
+          style: 'width:90px;padding:0',
+          oninput: () => { lsSet('kopipe.bgBlur', blurSlider.value + 'px'); applyBgConfig(); }
+        });
+        const paintBg = () => {
+          bgGroup.replaceChildren(
+            h('button', { class: 'chip' + (bgMode === 'default' ? ' on' : ''), onclick: () => { bgMode = 'default'; lsSet('kopipe.bgMode', 'default'); applyBgConfig(); paintBg(); toast('Default anime wallpaper applied'); } }, 'Default Anime Scene'),
+            h('button', { class: 'chip' + (bgMode === 'custom' ? ' on' : ''), onclick: () => bgInp.click() }, 'Upload Custom Wallpaper / CG...'),
+            h('button', { class: 'chip' + (bgMode === 'none' ? ' on' : ''), onclick: () => { bgMode = 'none'; lsSet('kopipe.bgMode', 'none'); applyBgConfig(); paintBg(); toast('Wallpaper disabled'); } }, 'Solid Background (Off)'),
+            bgInp
+          );
+        };
+        paintBg();
         const hGroup = h('div', { class: 'opt-group' });
         const paintH = () => {
           hGroup.replaceChildren(
@@ -1355,28 +1373,25 @@ async function renderSettings(v) {
           );
         };
         paintPos();
-        const paintBg = () => {
-          bgGroup.replaceChildren(
-            h('button', { class: 'chip' + (bgMode === 'default' ? ' on' : ''), onclick: () => { bgMode = 'default'; lsSet('kopipe.bgMode', 'default'); applyBgConfig(); paintBg(); } }, 'VN Character Scene'),
-            h('button', { class: 'chip' + (bgMode === 'custom' ? ' on' : ''), onclick: () => bgInp.click() }, 'Upload Custom CG...'),
-            h('button', { class: 'chip' + (bgMode === 'none' ? ' on' : ''), onclick: () => { bgMode = 'none'; lsSet('kopipe.bgMode', 'none'); applyBgConfig(); paintBg(); } }, 'Solid (Off)'),
-            dimSlider,
-            bgInp
-          );
-        };
-        paintBg();
         return [
           h('div', { class: 'cfg-row' },
-            h('div', {}, h('div', { class: 'cfg-lbl' }, 'VN Stage Backdrop & Dimming'), h('div', { class: 'cfg-sub' }, 'Character / CG artwork behind interface and inside Live VN Box Preview')),
+            h('div', {}, h('div', { class: 'cfg-lbl' }, 'Full-Screen VN Wallpaper'), h('div', { class: 'cfg-sub' }, 'Artwork displayed across the entire app background')),
             bgGroup
           ),
           h('div', { class: 'cfg-row' },
-            h('div', {}, h('div', { class: 'cfg-lbl' }, 'VN Box Preview Stage Height'), h('div', { class: 'cfg-sub' }, 'Vertical room for character sprite & scene framing')),
-            hGroup
+            h('div', {}, h('div', { class: 'cfg-lbl' }, 'Wallpaper Dimming & Blur'), h('div', { class: 'cfg-sub' }, 'Adjust darkness (left) and softness/blur (right) so backlog text is always readable')),
+            h('div', { class: 'row', style: 'margin:0;gap:12px' },
+              h('div', { class: 'row', style: 'margin:0;gap:6px' }, h('span', { class: 'dim' }, 'Darkness:'), dimSlider),
+              h('div', { class: 'row', style: 'margin:0;gap:6px' }, h('span', { class: 'dim' }, 'Blur:'), blurSlider)
+            )
           ),
           h('div', { class: 'cfg-row' },
-            h('div', {}, h('div', { class: 'cfg-lbl' }, 'VN Stage Camera Focus'), h('div', { class: 'cfg-sub' }, 'Vertical alignment for character face / upper body')),
+            h('div', {}, h('div', { class: 'cfg-lbl' }, 'Wallpaper Vertical Alignment'), h('div', { class: 'cfg-sub' }, 'Align image vertically so character face or scene focus stays centered')),
             posGroup
+          ),
+          h('div', { class: 'cfg-row' },
+            h('div', {}, h('div', { class: 'cfg-lbl' }, 'VN Box Preview Stage Height'), h('div', { class: 'cfg-sub' }, 'Height of the simulation stage when [VN Box Preview] checkbox is enabled')),
+            hGroup
           )
         ];
       })(),
