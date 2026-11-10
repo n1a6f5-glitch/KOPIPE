@@ -167,12 +167,18 @@ $('#crumb').onclick = () => openProject(null);
 function buildScopePicker(files, onChange) {
   const dirs = new Map();
   for (const f of files) {
+    const fs = f.stats || { total: f.entryCount || 0, todo: f.entryCount || 0 };
+    const tr = Math.max(0, (fs.total || 0) - (fs.todo || 0));
     const d = P.dirName(f.path || f.name);
     if (d) {
       const parts = d.split('/');
       for (let i = 1; i <= parts.length; i++) {
         const sub = parts.slice(0, i).join('/');
-        dirs.set(sub, (dirs.get(sub) || 0) + 1);
+        const cur = dirs.get(sub) || { count: 0, tr: 0, total: 0 };
+        cur.count++;
+        cur.tr += tr;
+        cur.total += fs.total || 0;
+        dirs.set(sub, cur);
       }
     }
   }
@@ -180,16 +186,24 @@ function buildScopePicker(files, onChange) {
   const sel = h('select', { onchange: e => { applyScope(e.target.value); S.batchFrom = null; onChange(); } });
   const populate = (filterStr = '') => {
     const flt = filterStr.trim().toLowerCase();
-    sel.replaceChildren(h('option', { value: '' }, 'All Files'));
+    const pStats = (proj && proj.stats) || { total: 0, todo: 0 };
+    const pTr = Math.max(0, (pStats.total || 0) - (pStats.todo || 0));
+    const pPct = pStats.total ? Math.round((pTr / pStats.total) * 100) : 0;
+    sel.replaceChildren(h('option', { value: '' }, `All Files (${pPct}% · ${pTr}/${pStats.total || 0})`));
     for (const d of sortedDirs) {
       if (flt && !d.toLowerCase().includes(flt)) continue;
       const val = 'dir:' + d;
-      sel.append(h('option', { value: val, selected: S.scope === val }, `[Dir] ${d}/ (${dirs.get(d)})`));
+      const info = dirs.get(d);
+      const dPct = info.total ? Math.round((info.tr / info.total) * 100) : 0;
+      sel.append(h('option', { value: val, selected: S.scope === val }, `[${String(dPct).padStart(3, ' ')}%] [Dir] ${d}/ (${info.tr}/${info.total} · ${info.count} files)`));
     }
     for (const f of files) {
       const label = f.path || f.name;
       if (flt && !label.toLowerCase().includes(flt)) continue;
-      sel.append(h('option', { value: f.id, selected: S.fid === f.id || S.scope === f.id }, label));
+      const fs = f.stats || { total: f.entryCount || 0, todo: f.entryCount || 0 };
+      const tr = Math.max(0, (fs.total || 0) - (fs.todo || 0));
+      const pct = fs.total ? Math.round((tr / fs.total) * 100) : 0;
+      sel.append(h('option', { value: f.id, selected: S.fid === f.id || S.scope === f.id }, `[${String(pct).padStart(3, ' ')}%] ${label} (${tr}/${fs.total || 0})`));
     }
   };
   populate('');
@@ -299,9 +313,50 @@ async function renderEdit(v) {
     previewWrap.hidden = !S.showVnPreview;
   } });
 
+  const findInp = h('input', { placeholder: 'Find in translations...', style: 'width:190px' });
+  const repInp = h('input', { placeholder: 'Replace with...', style: 'width:190px' });
+  const caseChk = h('input', { type: 'checkbox' });
+  const findResSpan = h('span', { class: 'dim', style: 'font-family:var(--mono)' }, '');
+  const findBar = h('div', { class: 'prog-box row', hidden: !S.showFindReplace, style: 'margin-top:0;margin-bottom:10px' },
+    findInp,
+    repInp,
+    h('label', { class: 'pill-chk' }, caseChk, 'Match case'),
+    h('button', { class: 'pri sm', onclick: async () => {
+      if (!findInp.value) return toast('Enter text to find');
+      const r = await P.replaceInTranslations(store, proj.id, {
+        findText: findInp.value,
+        replaceText: repInp.value,
+        fid: S.fid || undefined,
+        folder: S.folder || undefined,
+        matchCase: caseChk.checked
+      });
+      if (!r.replacedEntries) {
+        findResSpan.textContent = '0 matches';
+        return toast('No matching translations found');
+      }
+      markQcDirty();
+      proj = await store.get('projects', proj.id);
+      findResSpan.textContent = `Replaced ${r.occurrences} in ${r.replacedEntries} lines`;
+      toast(`Replaced ${r.occurrences} occurrences across ${r.replacedEntries} lines`);
+      await list();
+    } }, 'Replace All'),
+    h('button', { class: 'sm danger', onclick: async () => {
+      const n = await P.undoApply(store, proj.id);
+      if (!n) return toast('Nothing to undo');
+      markQcDirty();
+      proj = await store.get('projects', proj.id);
+      findResSpan.textContent = `Reverted ${n} lines`;
+      toast(`Reverted ${n} lines`);
+      await refreshHeader();
+      await list();
+    } }, 'Undo'),
+    findResSpan
+  );
+
   const chips = h('div', { class: 'row' },
     statusItems.map(([k, l]) => h('button', { class: 'chip' + (S.status === k ? ' on' : ''), onclick: () => { S.status = k; S.page = 1; render(); } }, l)),
-    h('label', { class: 'pill-chk', style: 'margin-left:auto', title: 'Show live Visual Novel message box preview while editing' }, prevChk, 'VN Box Preview'),
+    h('button', { class: 'chip' + (S.showFindReplace ? ' on' : ''), style: 'margin-left:auto', onclick: () => { S.showFindReplace = !S.showFindReplace; findBar.hidden = !S.showFindReplace; } }, 'Find & Replace'),
+    h('label', { class: 'pill-chk', title: 'Show live Visual Novel message box preview while editing' }, prevChk, 'VN Box Preview'),
     h('label', { class: 'pill-chk', title: 'Hide <T#> tags and reattach them automatically on save' }, hideTagsChk, 'Auto-tag')
   );
 
@@ -336,7 +391,7 @@ async function renderEdit(v) {
   };
 
   const box = h('div');
-  v.append(h('div', { class: 'row' }, ...scopeCtrls, q), chips, previewWrap, box);
+  v.append(h('div', { class: 'row' }, ...scopeCtrls, q), chips, findBar, previewWrap, box);
 
   async function jumpToGid(targetGid) {
     if (!targetGid || targetGid < 1) return;
@@ -473,22 +528,38 @@ function card(e) {
       toast('Tags reattached');
     }
   }, 'Fix Tags') : null;
+  if (nm) nm.hidden = true;
+  const spkEl = (e.name && e.name !== 'Narasi') ? h('span', {
+    class: 'spk-badge',
+    style: 'cursor:pointer',
+    title: 'Click to set translated speaker name across project (Glossary)',
+    onclick: async () => {
+      const curName = cur.tgtName || (proj.glossary && proj.glossary[e.name]) || e.name;
+      const nextName = prompt(`Set translated name for speaker "${e.name}" across the entire project:`, curName);
+      if (nextName === null) return;
+      const n = await P.renameSpeakerGlobally(store, proj.id, e.name, nextName);
+      markQcDirty();
+      proj = await store.get('projects', proj.id);
+      cur.tgtName = nextName.trim();
+      spkEl.textContent = cur.tgtName && cur.tgtName !== e.name ? `${e.name} → ${cur.tgtName}` : e.name;
+      if (updatePreviewFn) updatePreviewFn(cur, ta.value, cur.tgtName);
+      toast(`Speaker "${e.name}" → "${cur.tgtName || e.name}" (${n} lines updated)`);
+    }
+  }, (e.tgtName && e.tgtName !== e.name) ? `${e.name} → ${e.tgtName}` : e.name) : null;
+
   el.append(...[
     h('div', { class: 'h' },
-      e.name && e.name !== 'Narasi' ? h('span', { class: 'spk-badge' }, e.name) : null,
+      spkEl,
       h('span', { style: 'color:var(--ink)' }, `#${String(e.gid).padStart(6, '0')}`),
       h('span', { class: 'badge ' + kClass }, kLabel),
-      st
+      st,
+      fixTagBtn,
+      h('button', { class: 'sm', onclick: async () => { toast((await copyText(P.stripAllTagsForAi(e.src))) ? 'Copied JP text' : 'Copy failed'); } }, 'Copy JP'),
+      doneBtn
     ),
     src,
     ta,
-    note,
-    h('div', { class: 'act' },
-      doneBtn,
-      fixTagBtn,
-      h('button', { class: 'sm', onclick: async () => { toast((await copyText(P.stripAllTagsForAi(e.src))) ? 'Copied JP text' : 'Copy failed'); } }, 'Copy JP'),
-      nm
-    )
+    note
   ].filter(Boolean));
   paint(e); return el;
 }
@@ -578,9 +649,15 @@ async function renderBatch(v) {
 
   const out = h('textarea', { rows: 9, readonly: true, placeholder: 'Click "Generate & Copy" to build the batch with prompt and copy it to your clipboard.' });
   const info = h('span', { class: 'badge' }, 'READY');
-  let lastRawBatch = '';
+  let lastRawBatch = '', lastExportedEndGid = null;
 
-  const make = async (includePrompt = true) => {
+  const make = async (includePrompt = true, advanceNext = false) => {
+    if (advanceNext) {
+      const step = Math.max(1, +count.value || 100);
+      const nextStart = lastExportedEndGid ? (lastExportedEndGid + 1) : ((+from.value || 1) + step);
+      from.value = nextStart;
+      S.batchFrom = nextStart;
+    }
     const pLang = includePrompt ? promptSel.value : 'none';
     const tMode = tagModeSel.value;
     const bCount = Math.max(1, +count.value || 100);
@@ -606,6 +683,7 @@ async function renderBatch(v) {
       customPrompt: promptTa.value
     });
     lastRawBatch = b.rawText;
+    if (b.lastGid) lastExportedEndGid = b.lastGid;
     out.value = b.text;
     info.textContent = b.count ? `${b.count} LINES · #${b.firstGid}–#${b.lastGid}` : 'NO MATCH';
     if (b.count && (await copyText(b.text))) {
@@ -662,7 +740,8 @@ async function renderBatch(v) {
         h('div', { class: 'field' }, h('span', {}, 'Tag Mode'), tagModeSel)
       ),
       h('div', { class: 'row' },
-        h('button', { class: 'pri', onclick: () => make(true) }, 'Generate & Copy'),
+        h('button', { class: 'pri', onclick: () => make(true, false) }, 'Generate & Copy'),
+        h('button', { title: 'Advance From Line (#ID) to the next batch and copy immediately (for parallel multi-tab AI translation)', onclick: () => make(true, true) }, 'Next Batch & Copy >>'),
         h('button', { class: 'sm', onclick: async () => {
           if (!lastRawBatch) await make(false);
           else { out.value = lastRawBatch; if (await copyText(lastRawBatch)) toast('Copied script lines only'); }

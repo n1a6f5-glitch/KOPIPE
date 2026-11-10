@@ -1093,3 +1093,55 @@ export async function exportTranslations(store, pid, { fmt } = {}) {
   }
   return out.join('\n') + (out.length ? '\n' : '');
 }
+
+// Mass Find & Replace across translated entries (supports Undo via p.lastUndo)
+export async function replaceInTranslations(store, pid, { findText, replaceText = "", fid, folder, fids, matchCase = false } = {}) {
+  if (!findText) return { replacedEntries: 0, occurrences: 0, canUndo: false };
+  const p = await ensureMigrated(store, pid);
+  const es = await listEntries(store, pid, { fid, folder, fids });
+  const esc = String(findText).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(esc, matchCase ? "g" : "gi");
+  const upd = [], snap = [];
+  let occurrences = 0;
+  for (const e of es) {
+    if (!e.tgt || !e.tgt.trim()) continue;
+    const matches = e.tgt.match(re);
+    if (!matches || !matches.length) continue;
+    snap.push({ id: e.id, tgt: e.tgt, tgtName: e.tgtName, status: e.status, note: e.note });
+    occurrences += matches.length;
+    e.tgt = fixTagSpacing(e.tgt.replace(re, replaceText));
+    upd.push(e);
+  }
+  if (upd.length) {
+    await putEntriesChunked(store, upd);
+    if (p) {
+      p.lastUndo = { ts: Date.now(), items: snap };
+      await touch(store, p);
+    }
+  }
+  return { replacedEntries: upd.length, occurrences, canUndo: upd.length > 0 };
+}
+
+// Globally set speaker translation across project glossary and all matching entries
+export async function renameSpeakerGlobally(store, pid, rawName, translatedName) {
+  if (!rawName) return 0;
+  const p = await ensureMigrated(store, pid);
+  const cleanTgt = (translatedName || "").trim();
+  p.glossary = p.glossary || {};
+  if (cleanTgt) p.glossary[rawName] = cleanTgt;
+  else delete p.glossary[rawName];
+  await touch(store, p);
+  const all = await store.where("entries", "pid", pid);
+  const upd = [];
+  for (const e of all) {
+    if (e.name === rawName || (cleanTgt && e.name === cleanTgt)) {
+      if (e.tgtName !== cleanTgt) {
+        e.tgtName = cleanTgt;
+        upd.push(e);
+      }
+    }
+  }
+  if (upd.length) await putEntriesChunked(store, upd);
+  await reapplyGlossary(store, pid);
+  return upd.length;
+}
