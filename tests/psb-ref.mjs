@@ -231,3 +231,58 @@ function roundTrip(label, raw, wrap) {
   assert.ok(badRep.warnings.some(w => /gagal diverifikasi/i.test(w)));
   console.log('ok SCN repack self-verification catches corrupted output');
 }
+
+{
+  // 6. SCN Choices (selects[i].text, selectInfo.select[i].text, selectInfo.select[i].runLineStr)
+  const choiceScene = O([
+    ['title', S('scene_choice')],
+    ['texts', C(
+      T('ヒトミ', 'Hitomi', 'どうする？')
+    )],
+    ['selects', C(
+      O([['text', S('　喉が壊れても…')], ['target', S('*01_01')]]),
+      O([['text', S('　今は休む')], ['target', S('*01_02')]])
+    )],
+    ['selectInfo', O([
+      ['select', C(
+        O([['text', S('　喉が壊れても…')], ['runLineStr', S('[seladd text="　喉が壊れても…" target="*01_01"]')]]),
+        O([['text', S('　今は休む')], ['runLineStr', S('[seladd text="　今は休む" target="*01_02"]')]])
+      )]
+    ])]
+  ]);
+  const choicePsb = buildPsb(O([['scenes', C(choiceScene)]]));
+  const logCh = createLog();
+  const exCh = extractFromScn(choicePsb, [], { log: logCh });
+  assert.equal(exCh.entryCount, 3, '1 dialogue + 2 deduplicated choices');
+  assert.equal(summarizeLog(logCh), 'ok', 'choice mirror slots must not trigger false sharedWithNonDialogue warning');
+  assert.match(exCh.lines[1], /^\[1\|Narasi\] 　喉が壊れても…$/);
+  assert.match(exCh.lines[2], /^\[2\|Narasi\] 　今は休む$/);
+
+  const repLog = createLog();
+  const repCh = repackScn(choicePsb, exCh.tagStore, {
+    0: ['Hitomi', 'Apa yang harus kulakukan?'],
+    1: ['Narasi', '　Meski tenggorokanku rusak…'],
+    2: ['Narasi', '　Istirahat sekarang']
+  }, 0, '\n', { log: repLog, verify: true });
+  assert.equal(repCh.verifyOk, true, 'choice repack self-verification OK');
+  assert.equal(summarizeLog(repLog), 'ok');
+
+  // Verify all 3 places (selects[i].text, selectInfo.select[i].text, selectInfo.select[i].runLineStr) are updated in repacked PSB
+  const parsedOut = parsePsb(repCh.buf);
+  const outTree = [];
+  fmt(parsedOut, parsedOut.root, 'ROOT', 0, outTree);
+  const outText = outTree.join('\n');
+  assert.ok(outText.includes('text = STR #') && outText.includes('"　Meski tenggorokanku rusak…"'), 'selects[0].text & selectInfo.select[0].text updated');
+  assert.ok(outText.includes('[seladd text="　Meski tenggorokanku rusak…" target="*01_01"]'), 'selectInfo.select[0].runLineStr updated');
+  assert.ok(outText.includes('[seladd text="　Istirahat sekarang" target="*01_02"]'), 'selectInfo.select[1].runLineStr updated');
+  assert.ok(!outText.includes('喉が壊れても'), 'no untranslated choice 1 left in tree');
+  assert.ok(!outText.includes('今は休む'), 'no untranslated choice 2 left in tree');
+
+  if (HAVE_REF) {
+    fs.writeFileSync('/tmp/rt-choice.psb', repCh.buf);
+    const refDump = execFileSync('./tests/ref/dump', ['/tmp/rt-choice.psb']).toString();
+    assert.ok(refDump.includes('Meski tenggorokanku rusak'), 'C++ reference dumper sees translated choice text');
+    assert.ok(refDump.includes('[seladd text=\\"　Meski tenggorokanku rusak…\\" target=\\"*01_01\\"]'), 'C++ reference dumper sees translated runLineStr');
+  }
+  console.log('ok SCN choices (selects[i].text + selectInfo.select[i].text + selectInfo.select[i].runLineStr) round-trip');
+}
