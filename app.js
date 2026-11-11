@@ -1261,6 +1261,29 @@ async function renderFiles(v) {
           if (!t) return toast('No translations yet');
           download((proj.name.replace(/[^\w.-]+/g, '_') || 'kopipe') + '_translations.txt', new TextEncoder().encode(t), 'text/plain');
         } }, 'Export Translations (.txt)'),
+        h('button', {
+          title: 'Re-extract all already-uploaded files with the latest parser (e.g. to pull new SCN choices) without re-uploading or losing translations',
+          onclick: async () => {
+            if (!files.length) return toast('No files to re-parse');
+            const bar = h('div', { class: 'prog-fill' });
+            const lbl = h('span', {}, 'Re-parsing stored files...');
+            progHolder.replaceChildren(h('div', { class: 'prog-box' }, lbl, h('div', { class: 'prog-bar' }, bar)));
+            try {
+              const r = await P.reparseStoredFiles(store, proj.id, {
+                onProgress: p => {
+                  lbl.textContent = `Re-parsing (${p.index}/${p.total}): ${p.name}`;
+                  bar.style.width = `${Math.round((p.index / p.total) * 100)}%`;
+                }
+              });
+              markQcDirty();
+              proj = await P.ensureMigrated(store, proj.id);
+              toast(`Re-parsed ${r.updatedFiles} files (+${r.addedLines} new choice/lines, ${r.keptLines} translations kept)`);
+              await render();
+            } catch (err) {
+              toast('Re-parse failed: ' + err.message);
+            }
+          }
+        }, 'Re-parse All Files'),
         h('label', { class: 'pill-chk', style: 'margin-left:auto' }, onlyTransChk, 'Translated files only'),
         hasFsApi ? h('label', { class: 'pill-chk' }, subChk, 'Write to output/') : null,
         h('button', {
@@ -1817,9 +1840,10 @@ async function renderKamus(v) {
   store = await createStore();
   try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) { /* ignore */ }
   if ('serviceWorker' in navigator) {
+    const hadController = !!navigator.serviceWorker.controller;
     let reloading = false;
     navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (!reloading) { reloading = true; location.reload(); }
+      if (hadController && !reloading) { reloading = true; location.reload(); }
     });
     navigator.serviceWorker.register('./sw.js').then(reg => {
       swReg = reg;

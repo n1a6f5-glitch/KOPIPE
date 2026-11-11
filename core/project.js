@@ -1145,3 +1145,24 @@ export async function renameSpeakerGlobally(store, pid, rawName, translatedName)
   await reapplyGlossary(store, pid);
   return upd.length;
 }
+
+// Re-parse all stored files in IndexedDB using the updated parser while keeping all existing translations
+export async function reparseStoredFiles(store, pid, { onProgress } = {}) {
+  const files = await listFiles(store, pid);
+  let updatedFiles = 0, addedLines = 0, keptLines = 0;
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i];
+    if (onProgress) onProgress({ index: i + 1, total: files.length, name: f.path || f.name });
+    await new Promise(r => setTimeout(r, 0));
+    const blob = await getFileBlob(store, f);
+    if (!blob || !blob.bytes || !blob.bytes.length) continue;
+    const oldCount = f.entryCount || 0;
+    const hint = f.kind === "artemis-txt" ? "artemis" : f.kind === "txt" ? "kirikiri" : "auto";
+    const r = await updateFileSource(store, f.id, blob.bytes, { txtHint: hint, vntpFilter: !!(f.meta && f.meta.vntpFilter) });
+    updatedFiles++;
+    addedLines += Math.max(0, r.count - oldCount);
+    keptLines += r.kept || 0;
+  }
+  await recount(store, pid);
+  return { updatedFiles, addedLines, keptLines };
+}
