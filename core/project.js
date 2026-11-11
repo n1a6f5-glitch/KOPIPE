@@ -1,8 +1,8 @@
 // core/project.js – project model on top of a store (core/db.js): import scripts, edit translations, batch export/apply, repack.
 import { uid } from './db.js';
 import { importScript, exportScript } from './engines/index.js';
-import { LINE_RE, parseBatchUnified, formatBatchLine, formatFileHeader, padGlobalId, detectEntryKind, isNarrationSpeaker } from './batch.js';
-export { isNarrationSpeaker };
+import { LINE_RE, parseBatchUnified, formatBatchLine, formatFileHeader, padGlobalId, detectEntryKind, isNarrationSpeaker, isChoiceSpeaker } from './batch.js';
+export { isNarrationSpeaker, isChoiceSpeaker };
 import { sortGls } from './util.js';
 import { analyzeTagSafety, stripTagsForAi, fixTags, validate, glossaryRules, CRIT_TYPES } from './qc.js';
 import { matchVndb, buildGls } from './vndb.js';
@@ -488,7 +488,7 @@ export async function listEntries(store, pid, { fid, folder, fids, status, q } =
   }
   es.sort((a, b) => a.gid - b.gid);
   if (status) es = es.filter(e => e.status === status);
-  if (q) { const n = q.toLowerCase(); es = es.filter(e => (e.src + ' ' + e.tgt + ' ' + e.name + ' ' + (e.tgtName || '')).toLowerCase().includes(n)); }
+  if (q) { const n = q.toLowerCase(); es = es.filter(e => { const isCh = e.kind === 'C' || (e.name || '').toLowerCase() === 'choice'; return ((e.src + ' ' + e.tgt + ' ' + e.name + ' ' + (e.tgtName || '')).toLowerCase() + (isCh ? ' choice pilihan select' : '')).includes(n); }); }
   return es;
 }
 
@@ -672,7 +672,7 @@ export async function applyBatch(store, pid, text, { autofix = true } = {}) {
     if (!snap.has(e.id)) snap.set(e.id, { id: e.id, tgt: e.tgt, tgtName: e.tgtName, status: e.status, note: e.note });
     e.tgt = fixTagSpacing(x.text || '');
     if (autofix && e.tgt.trim()) { const f = fixTags(e.src, e.tgt); if (f !== e.tgt.trim()) res.fixed++; e.tgt = f; }
-    e.tgtName = isNarrationSpeaker(x.name) || x.name === 'Dialog' || x.name === e.name ? '' : x.name;
+    e.tgtName = isNarrationSpeaker(x.name) || isChoiceSpeaker(x.name) || x.name === 'Dialog' || x.name === e.name ? '' : x.name;
     if (!e.tgt.trim()) { e.status = 'todo'; }
     else if (!checkTags(e.src, e.tgt)) { e.status = 'flag'; e.note = 'tag <T#> tidak cocok'; res.flagged++; }
     else { e.status = e.status === 'done' ? 'done' : 'draft'; delete e.note; }
@@ -1010,7 +1010,7 @@ export async function qcFixTags(store, pid, ids) {
 // ── Glossary / VNDB ─────────────────────────────────────
 export async function scanSpeakerNames(store, pid) {
   const freq = {};
-  for (const e of await listEntries(store, pid)) { const n = (e.name || '').trim(); if (n && !isNarrationSpeaker(n) && n !== 'Dialog') freq[n] = (freq[n] || 0) + 1; }
+  for (const e of await listEntries(store, pid)) { const n = (e.name || '').trim(); if (n && !isNarrationSpeaker(n) && !isChoiceSpeaker(n) && n !== 'Dialog') freq[n] = (freq[n] || 0) + 1; }
   return Object.keys(freq).sort((a, b) => freq[b] - freq[a]);
 }
 

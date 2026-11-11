@@ -24,7 +24,8 @@ function matchEntryFilter(e, { fid, fidSet, status, qLow, gidFrom }) {
   if (status && e.status !== status) return false;
   if (gidFrom && e.gid < gidFrom) return false;
   if (qLow) {
-    const hay = e._q || ((e.src || '') + ' ' + (e.tgt || '') + ' ' + (e.name || '') + ' ' + (e.tgtName || '')).toLowerCase();
+    const isCh = e.kind === 'C' || (e.name || '').toLowerCase() === 'choice';
+    const hay = (e._q || ((e.src || '') + ' ' + (e.tgt || '') + ' ' + (e.name || '') + ' ' + (e.tgtName || '')).toLowerCase()) + (isCh ? ' choice pilihan select' : '');
     if (!hay.includes(qLow)) return false;
   }
   return true;

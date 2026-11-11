@@ -255,8 +255,8 @@ function roundTrip(label, raw, wrap) {
   const exCh = extractFromScn(choicePsb, [], { log: logCh });
   assert.equal(exCh.entryCount, 3, '1 dialogue + 2 deduplicated choices');
   assert.equal(summarizeLog(logCh), 'ok', 'choice mirror slots must not trigger false sharedWithNonDialogue warning');
-  assert.match(exCh.lines[1], /^\[1\|Narasi\] 　喉が壊れても…$/);
-  assert.match(exCh.lines[2], /^\[2\|Narasi\] 　今は休む$/);
+  assert.match(exCh.lines[1], /^\[1\|Choice\] 　喉が壊れても…$/);
+  assert.match(exCh.lines[2], /^\[2\|Choice\] 　今は休む$/);
 
   const repLog = createLog();
   const repCh = repackScn(choicePsb, exCh.tagStore, {

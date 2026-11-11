@@ -303,7 +303,7 @@ function scnExtractSelectsFromObj(psb, obj, sceneIdx, fallbackInfoPool){
       }
 
       out.push({
-        name: '',
+        name: 'Choice',
         message: msg,
         nameIdx: null,
         msgIdx: mainTextNode.index,
@@ -325,7 +325,7 @@ function scnExtractSelectsFromObj(psb, obj, sceneIdx, fallbackInfoPool){
       var rls = [];
       if(u.runNode) rls.push({ idx: u.runNode.index, off: u.runNode.byteOffset, w: u.runNode.byteWidth, origChoice: u.text });
       out.push({
-        name: '',
+        name: 'Choice',
         message: u.text,
         nameIdx: null,
         msgIdx: u.textNode.index,
@@ -339,7 +339,7 @@ function scnExtractSelectsFromObj(psb, obj, sceneIdx, fallbackInfoPool){
       var mText = /\btext\s*=\s*"([^"]+)"/i.exec(u.runStr) || /\btext\s*=\s*'([^']+)'/i.exec(u.runStr);
       if(mText && mText[1] && mText[1].trim()){
         out.push({
-          name: '',
+          name: 'Choice',
           message: mText[1],
           nameIdx: null,
           msgIdx: null,
@@ -1051,9 +1051,9 @@ function finishScnExtract(rawEntries, usedStrategy, xor, sg, log, psb, timing){
 
   for(var idx=0; idx<rawEntries.length; idx++){
     var e = rawEntries[idx];
-    var rawName = e.name || 'Narasi';
-    if(e.isSelect) selectCount++;
-    if(e.name && e.name.trim()) namedCount++; else narrationCount++;
+    var rawName = e.isSelect ? 'Choice' : (e.name || 'Narasi');
+    if(e.isSelect){ selectCount++; narrationCount++; }
+    else if(e.name && e.name.trim()) namedCount++; else narrationCount++;
     if(e.sceneIdx !== undefined) perScene[e.sceneIdx] = (perScene[e.sceneIdx] || 0) + 1;
     var name3 = sg.length ? applyGls(rawName,sg) : rawName;
     var msgSrc = e.message, nlReal = 0, nlIndent = '';

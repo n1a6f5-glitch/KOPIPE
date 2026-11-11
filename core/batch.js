@@ -3,11 +3,16 @@
 // P0 & P2 – UNIFIED MULTI-FORMAT PARSER & FORMATTER (KOPIPE + v2.4 Legacy)
 // ============================================================================
 var FILE_HDR = /^(?:---\s*(?:START\s+)?FILE\s*:\s*(.+?)\s*---|@FILE\s*:\s*(.+?))$/i;
-var LINE_RE = /^\[(\d+)\|(?:([^\]|]*))(?:\|([DNdn]))?\]\s?(.*)$/s;
+var LINE_RE = /^\[(\d+)\|(?:([^\]|]*))(?:\|([DNdnCc]))?\]\s?(.*)$/s;
 var LINE_RE_V25_NAR = /^(\d{1,7})\.\s*\((?:narasi|narration|n)\)\s*(.*)$/is;
 var LINE_RE_V25_BRK = /^(\d{1,7})\.\s*\[([^\]]+)\]\s*(.*)$/s;
 var LINE_RE_V25_COL = /^(\d{1,7})\.\s*([^""「\n]{1,35})\:\s*(["“「].*)$/s;
 var LINE_RE_V25_GEN = /^(\d{1,7})\.\s+(.*)$/s;
+
+function isChoiceSpeaker(name){
+  var n = (name || '').toLowerCase().trim();
+  return n === 'choice' || n === 'pilihan' || n === '[choice]' || n === '(choice)' || n === '(pilihan)';
+}
 
 function isNarrationSpeaker(name){
   var n = (name || '').toLowerCase();
@@ -15,6 +20,7 @@ function isNarrationSpeaker(name){
 }
 
 function detectEntryKind(name, rawText){
+  if(isChoiceSpeaker(name)) return 'C';
   if(!isNarrationSpeaker(name)) return 'D';
   var clean = (rawText || '').replace(/^(?:<T\d+>|\s)+/, '');
   if(/^["“「『]/.test(clean)) return 'D';
@@ -247,4 +253,4 @@ function resolveTranslationsForRepack(parsedEntries, allTags, fileGlobalMap){
   return trans;
 }
 
-export { FILE_HDR, LINE_RE, isNarrationSpeaker, detectEntryKind, padGlobalId, formatFileHeader, formatBatchLine, buildBatchFilename, parseBatchUnified, convertExtractedLinesToV25, resolveTranslationsForRepack };
+export { FILE_HDR, LINE_RE, isNarrationSpeaker, isChoiceSpeaker, detectEntryKind, padGlobalId, formatFileHeader, formatBatchLine, buildBatchFilename, parseBatchUnified, convertExtractedLinesToV25, resolveTranslationsForRepack };

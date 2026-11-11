@@ -355,6 +355,7 @@ async function renderEdit(v) {
 
   const chips = h('div', { class: 'row' },
     statusItems.map(([k, l]) => h('button', { class: 'chip' + (S.status === k ? ' on' : ''), onclick: () => { S.status = k; S.page = 1; render(); } }, l)),
+    h('button', { class: 'chip' + (S.q.toLowerCase() === 'choice' ? ' on' : ''), title: 'Filter only branching choice options (Choice / Pilihan)', onclick: () => { S.q = S.q.toLowerCase() === 'choice' ? '' : 'Choice'; S.page = 1; render(); } }, 'Choices'),
     h('button', { class: 'chip' + (S.showFindReplace ? ' on' : ''), style: 'margin-left:auto', onclick: () => { S.showFindReplace = !S.showFindReplace; findBar.hidden = !S.showFindReplace; } }, 'Find & Replace'),
     h('label', { class: 'pill-chk', title: 'Show live Visual Novel message box preview while editing' }, prevChk, 'VN Box Preview'),
     h('label', { class: 'pill-chk', title: 'Hide <T#> tags and reattach them automatically on save' }, hideTagsChk, 'Auto-tag')
@@ -377,8 +378,9 @@ async function renderEdit(v) {
 
   updatePreviewFn = (entry, liveTgt, liveSpeaker) => {
     if (!entry) return;
-    const isDialog = isEntryDialogue(entry);
-    const spk = (liveSpeaker && liveSpeaker.trim()) || entry.tgtName || (isDialog ? (entry.name && !P.isNarrationSpeaker(entry.name) ? entry.name : 'DIALOGUE') : 'NARRATION');
+    const isChoice = entry.kind === 'C' || (P.isChoiceSpeaker && P.isChoiceSpeaker(entry.name));
+    const isDialog = !isChoice && isEntryDialogue(entry);
+    const spk = isChoice ? 'CHOICE' : ((liveSpeaker && liveSpeaker.trim()) || entry.tgtName || (isDialog ? (entry.name && !P.isNarrationSpeaker(entry.name) ? entry.name : 'DIALOGUE') : 'NARRATION'));
     vnPlate.textContent = spk;
     vnPlate.className = 'vn-nameplate' + (isDialog ? '' : ' narasi');
     const formatted = formatVnPreviewText(liveTgt !== undefined ? liveTgt : entry.tgt, entry.src);
@@ -462,15 +464,16 @@ async function renderEdit(v) {
 function card(e) {
   let timer, cur = e;
   const hasTags = /<T\d+>/.test(e.src);
-  const isDialog = isEntryDialogue(e);
+  const isChoice = e.kind === 'C' || (P.isChoiceSpeaker && P.isChoiceSpeaker(e.name));
+  const isDialog = !isChoice && isEntryDialogue(e);
   const st = h('span', { class: 'st' }, STAT_LABEL[e.status] || e.status);
   const note = h('div', { class: 'note' }, e.note || '');
   const ta = h('textarea', {
-    placeholder: isDialog ? 'Dialogue translation...' : 'Narration translation...',
+    placeholder: isChoice ? 'Choice button translation...' : (isDialog ? 'Dialogue translation...' : 'Narration translation...'),
     rows: Math.max(2, Math.min(6, Math.ceil(e.src.length / 48)))
   });
   ta.value = S.hideTagsInEdit && hasTags ? P.stripAllTagsForAi(e.tgt) : e.tgt;
-  const nm = e.name && e.name !== 'Narasi' ? h('input', { class: 'nm', placeholder: 'Speaker: ' + e.name, value: e.tgtName }) : null;
+  const nm = (e.name && e.name !== 'Narasi' && !isChoice) ? h('input', { class: 'nm', placeholder: 'Speaker: ' + e.name, value: e.tgtName }) : null;
   const doneBtn = h('button', { class: 'sm' }, '');
   const el = h('div', { class: 'card s-' + e.status, 'data-gid': e.gid });
   const paint = r => {
@@ -517,8 +520,8 @@ function card(e) {
   });
   const src = h('div', { class: 'src' }, srcNodes(e.src, S.hideTagsInEdit));
   src.addEventListener('click', ev => { const t = ev.target.dataset && ev.target.dataset.tag; if (t) { const p = ta.selectionStart ?? ta.value.length; ta.setRangeText(t, p, ta.selectionEnd ?? p, 'end'); ta.focus(); ta.dispatchEvent(new Event('input')); } });
-  const kClass = isDialog ? 'k-dialog' : 'k-narasi';
-  const kLabel = isDialog ? 'Dialog' : 'Narration';
+  const kClass = isChoice ? 'k-choice' : (isDialog ? 'k-dialog' : 'k-narasi');
+  const kLabel = isChoice ? 'Choice' : (isDialog ? 'Dialog' : 'Narration');
   const fixTagBtn = (!S.hideTagsInEdit && hasTags) ? h('button', {
     class: 'sm',
     title: 'Automatically reattach <T#> tags from source',
@@ -529,7 +532,7 @@ function card(e) {
     }
   }, 'Fix Tags') : null;
   if (nm) nm.hidden = true;
-  const spkEl = (e.name && e.name !== 'Narasi') ? h('span', {
+  const spkEl = (e.name && e.name !== 'Narasi' && !isChoice) ? h('span', {
     class: 'spk-badge',
     style: 'cursor:pointer',
     title: 'Click to set translated speaker name across project (Glossary)',
