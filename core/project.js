@@ -8,6 +8,7 @@ import { analyzeTagSafety, stripTagsForAi, fixTags, validate, glossaryRules, CRI
 import { matchVndb, buildGls } from './vndb.js';
 import { createLog, summarizeLog, formatLog } from './log.js';
 
+export const APP_VERSION = '1.2.1';
 export const SCHEMA_VERSION = 2;
 export const STATUS = ['todo', 'draft', 'done', 'flag'];
 export const SCRIPT_EXTS = ['.ks', '.txt', '.ast', '.scn', '.json'];
@@ -488,7 +489,19 @@ export async function listEntries(store, pid, { fid, folder, fids, status, q } =
   }
   es.sort((a, b) => a.gid - b.gid);
   if (status) es = es.filter(e => e.status === status);
-  if (q) { const n = q.toLowerCase(); es = es.filter(e => { const isCh = e.kind === 'C' || (e.name || '').toLowerCase() === 'choice'; return ((e.src + ' ' + e.tgt + ' ' + e.name + ' ' + (e.tgtName || '')).toLowerCase() + (isCh ? ' choice pilihan select' : '')).includes(n); }); }
+  if (q) {
+    const n = q.trim().toLowerCase();
+    if (n) {
+      es = es.filter(e => {
+        const isCh = e.kind === "C" || (e.name || "").toLowerCase() === "choice";
+        const cleanSrc = (e.src || "").replace(/<T\d+>/g, "").replace(/<BR>/g, " ");
+        const cleanTgt = (e.tgt || "").replace(/<T\d+>/g, "").replace(/<BR>/g, " ");
+        const gidStr = e.gid ? `#${e.gid} #${String(e.gid).padStart(6, "0")}` : "";
+        const hay = ((e.src || "") + " " + cleanSrc + " " + (e.tgt || "") + " " + cleanTgt + " " + (e.name || "") + " " + (e.tgtName || "") + " " + gidStr + (isCh ? " choice pilihan select" : "")).toLowerCase();
+        return hay.includes(n);
+      });
+    }
+  }
   return es;
 }
 
@@ -1094,23 +1107,108 @@ export async function exportTranslations(store, pid, { fmt } = {}) {
   return out.join('\n') + (out.length ? '\n' : '');
 }
 
-// Mass Find & Replace across translated entries (supports Undo via p.lastUndo)
-export async function replaceInTranslations(store, pid, { findText, replaceText = "", fid, folder, fids, matchCase = false } = {}) {
-  if (!findText) return { replacedEntries: 0, occurrences: 0, canUndo: false };
+export function buildFindRegex(findText, { regex = false, matchCase = false, exactMatch = false } = {}) {
+  if (!findText) return null;
+  let pat = regex ? String(findText) : String(findText).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (exactMatch) {
+    pat = `(?<![A-Za-z0-9_])(?:${pat})(?![A-Za-z0-9_])`;
+  }
+  try {
+    return new RegExp(pat, matchCase ? "g" : "gi");
+  } catch (e) {
+    return null;
+  }
+}
+
+export function applyCasePreserving(match, replaceText) {
+  if (!replaceText) return "";
+  const hasCase = match.toUpperCase() !== match.toLowerCase();
+  if (!hasCase) return replaceText;
+  if (match.length > 1 && match === match.toUpperCase()) return replaceText.toUpperCase();
+  const f0 = match.charAt(0);
+  if (f0 === f0.toUpperCase() && f0 !== f0.toLowerCase()) {
+    return replaceText.charAt(0).toUpperCase() + replaceText.slice(1);
+  }
+  if (f0 === f0.toLowerCase() && f0 !== f0.toUpperCase()) {
+    return replaceText.charAt(0).toLowerCase() + replaceText.slice(1);
+  }
+  return replaceText;
+}
+
+export function replaceSafeSegments(rawText, re, replaceText = "", { preserveCase = false } = {}) {
+  if (!rawText || !re) return { out: rawText || "", count: 0 };
+  const parts = String(rawText).split(/(<T\d+>|<BR>)/g);
+  let count = 0;
+  for (let i = 0; i < parts.length; i += 2) {
+    if (!parts[i]) continue;
+    re.lastIndex = 0;
+    parts[i] = parts[i].replace(re, m => {
+      if (!m) return m;
+      count++;
+      return preserveCase ? applyCasePreserving(m, replaceText) : replaceText;
+    });
+  }
+  return { out: fixTagSpacing(parts.join("")), count };
+}
+
+export function countSafeMatches(rawText, re) {
+  if (!rawText || !re) return 0;
+  const parts = String(rawText).split(/(<T\d+>|<BR>)/g);
+  let count = 0;
+  for (let i = 0; i < parts.length; i += 2) {
+    if (!parts[i]) continue;
+    re.lastIndex = 0;
+    const m = parts[i].match(re);
+    if (m) count += m.length;
+  }
+  return count;
+}
+
+// Mass Find & Replace across entries (supports Regex, Case Sensitive, Preserve Case, Exact Match, Translated Only, Target Field, Excluded IDs, and Undo)
+export async function replaceInTranslations(store, pid, {
+  findText,
+  replaceText = "",
+  fid,
+  folder,
+  fids,
+  targetField = "tgt",
+  regex = false,
+  matchCase = false,
+  preserveCase = false,
+  exactMatch = false,
+  translatedOnly = false,
+  excludeIds = null
+} = {}) {
+  const re = buildFindRegex(findText, { regex, matchCase, exactMatch });
+  if (!re) return { replacedEntries: 0, occurrences: 0, canUndo: false };
   const p = await ensureMigrated(store, pid);
   const es = await listEntries(store, pid, { fid, folder, fids });
-  const esc = String(findText).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const re = new RegExp(esc, matchCase ? "g" : "gi");
+  const exSet = excludeIds ? new Set(excludeIds) : null;
   const upd = [], snap = [];
   let occurrences = 0;
+
   for (const e of es) {
-    if (!e.tgt || !e.tgt.trim()) continue;
-    const matches = e.tgt.match(re);
-    if (!matches || !matches.length) continue;
-    snap.push({ id: e.id, tgt: e.tgt, tgtName: e.tgtName, status: e.status, note: e.note });
-    occurrences += matches.length;
-    e.tgt = fixTagSpacing(e.tgt.replace(re, replaceText));
-    upd.push(e);
+    if (exSet && exSet.has(e.id)) continue;
+    if (translatedOnly && (!e.tgt || !e.tgt.trim())) continue;
+
+    if (targetField === "speaker") {
+      const curSpk = e.tgtName || e.name || "";
+      if (!curSpk) continue;
+      const r = replaceSafeSegments(curSpk, re, replaceText, { preserveCase });
+      if (!r.count || r.out === curSpk) continue;
+      snap.push({ id: e.id, tgt: e.tgt, tgtName: e.tgtName, status: e.status, note: e.note });
+      occurrences += r.count;
+      e.tgtName = r.out;
+      upd.push(e);
+    } else {
+      if (!e.tgt || !e.tgt.trim()) continue;
+      const r = replaceSafeSegments(e.tgt, re, replaceText, { preserveCase });
+      if (!r.count || r.out === e.tgt) continue;
+      snap.push({ id: e.id, tgt: e.tgt, tgtName: e.tgtName, status: e.status, note: e.note });
+      occurrences += r.count;
+      e.tgt = r.out;
+      upd.push(e);
+    }
   }
   if (upd.length) {
     await putEntriesChunked(store, upd);

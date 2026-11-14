@@ -232,7 +232,7 @@ async function renderHome(v) {
     )
   );
   const ps = await P.listProjects(store);
-  if (!ps.length) v.append(h('p', { class: 'dim' }, 'No project slots found. Create a new project above, then import script files (.ks, .txt, .ast, .scn, VNTP .json) or an entire folder.'));
+  if (!ps.length) v.append(h('p', { class: 'dim' }, 'No project slots found. Create a new project above, then import your script files or game script folder.'));
   for (let i = 0; i < ps.length; i++) {
     const p = ps[i];
     const slotNum = `SLOT ${String(i + 1).padStart(2, '0')}`;
@@ -295,8 +295,23 @@ async function renderEdit(v) {
   if (!files.length) { v.append(h('p', { class: 'dim' }, 'No files in archive. Open 05 ARCHIVE to import script files or a folder.')); return; }
   const rfids = P.resolveScopeFids(files, { fid: S.fid, folder: S.folder });
   const scopeCtrls = buildScopePicker(files, () => { S.page = 1; render(); });
-  const q = h('input', { class: 'grow', placeholder: 'Search backlog text or speaker...', value: S.q });
-  let qt; q.addEventListener('input', () => { clearTimeout(qt); qt = setTimeout(() => { S.q = q.value; S.page = 1; list(); }, 220); });
+  let listSeq = 0;
+  const q = h('input', { class: 'grow', placeholder: 'Search backlog text, speaker, or #ID...', value: S.q });
+  const clearQBtn = h('button', {
+    class: 'sm',
+    hidden: !S.q,
+    title: 'Clear search query',
+    onclick: () => { q.value = ''; S.q = ''; clearQBtn.hidden = true; S.page = 1; list(); }
+  }, 'Clear ×');
+  let qt;
+  q.addEventListener('input', () => {
+    clearQBtn.hidden = !q.value;
+    clearTimeout(qt);
+    qt = setTimeout(() => { S.q = q.value; S.page = 1; list(); }, 140);
+  });
+  q.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { clearTimeout(qt); S.q = q.value; S.page = 1; list(); }
+  });
 
   const stStats = proj.stats || { total: 0, todo: 0, draft: 0, done: 0, flag: 0 };
   const statusItems = [
@@ -313,50 +328,230 @@ async function renderEdit(v) {
     previewWrap.hidden = !S.showVnPreview;
   } });
 
-  const findInp = h('input', { placeholder: 'Find in translations...', style: 'width:190px' });
-  const repInp = h('input', { placeholder: 'Replace with...', style: 'width:190px' });
-  const caseChk = h('input', { type: 'checkbox' });
-  const findResSpan = h('span', { class: 'dim', style: 'font-family:var(--mono)' }, '');
-  const findBar = h('div', { class: 'prog-box row', hidden: !S.showFindReplace, style: 'margin-top:0;margin-bottom:10px' },
-    findInp,
-    repInp,
-    h('label', { class: 'pill-chk' }, caseChk, 'Match case'),
-    h('button', { class: 'pri sm', onclick: async () => {
-      if (!findInp.value) return toast('Enter text to find');
-      const r = await P.replaceInTranslations(store, proj.id, {
-        findText: findInp.value,
-        replaceText: repInp.value,
-        fid: S.fid || undefined,
-        folder: S.folder || undefined,
-        matchCase: caseChk.checked
-      });
-      if (!r.replacedEntries) {
-        findResSpan.textContent = '0 matches';
-        return toast('No matching translations found');
+  const openFindReplaceModal = async () => {
+    const existing = $('#fr-modal'); if (existing) existing.remove();
+    const fileMap = new Map(files.map(f => [f.id, f.path || f.name]));
+    const allScopeEntries = await P.listEntries(store, proj.id, { fid: S.fid || undefined, folder: S.folder || undefined });
+    const excludedIds = new Set();
+
+    const findInp = h('input', { class: 'grow', placeholder: 'Find text or pattern...', value: S.frFind || '' });
+    const repInp = h('input', { class: 'grow', placeholder: 'Replace with...', value: S.frReplace || '' });
+    const scopeSel = h('select', { onchange: () => { S.frTarget = scopeSel.value; refreshMatches(); } }, [
+      ['all', 'All Text'],
+      ['tgt', 'Translation Only'],
+      ['src', 'Source (JP) Only'],
+      ['speaker', 'Speaker Name']
+    ].map(([k, l]) => h('option', { value: k, selected: (S.frTarget || 'all') === k }, l)));
+
+    const chkPreserve = h('input', { type: 'checkbox', checked: S.frPreserve !== false, onchange: () => { S.frPreserve = chkPreserve.checked; refreshMatches(); } });
+    const chkCase = h('input', { type: 'checkbox', checked: !!S.frCase, onchange: () => { S.frCase = chkCase.checked; refreshMatches(); } });
+    const chkExact = h('input', { type: 'checkbox', checked: !!S.frExact, onchange: () => { S.frExact = chkExact.checked; refreshMatches(); } });
+    const chkRegex = h('input', { type: 'checkbox', checked: !!S.frRegex, onchange: () => { S.frRegex = chkRegex.checked; refreshMatches(); } });
+    const chkTransOnly = h('input', { type: 'checkbox', checked: !!S.frTransOnly, onchange: () => { S.frTransOnly = chkTransOnly.checked; refreshMatches(); } });
+
+    const countLbl = h('span', { class: 'dim', style: 'font-family:var(--mono)' }, 'MATCHES: 0 LINES');
+    const listBox = h('div', { style: 'max-height:48vh;overflow-y:auto;padding-right:2px' });
+    let matchedEntries = [];
+
+    const renderHighlighted = (text, re) => {
+      const clean = P.stripAllTagsForAi(text || '');
+      if (!re || !clean) return [clean];
+      const nodes = [];
+      let last = 0;
+      const cloneRe = new RegExp(re.source, re.flags.includes('g') ? re.flags : re.flags + 'g');
+      let m;
+      while ((m = cloneRe.exec(clean)) !== null) {
+        if (!m[0]) { cloneRe.lastIndex++; continue; }
+        if (m.index > last) nodes.push(clean.slice(last, m.index));
+        nodes.push(h('mark', { class: 'fr-hl' }, m[0]));
+        last = m.index + m[0].length;
       }
-      markQcDirty();
-      proj = await store.get('projects', proj.id);
-      findResSpan.textContent = `Replaced ${r.occurrences} in ${r.replacedEntries} lines`;
-      toast(`Replaced ${r.occurrences} occurrences across ${r.replacedEntries} lines`);
-      await list();
-    } }, 'Replace All'),
-    h('button', { class: 'sm danger', onclick: async () => {
-      const n = await P.undoApply(store, proj.id);
-      if (!n) return toast('Nothing to undo');
-      markQcDirty();
-      proj = await store.get('projects', proj.id);
-      findResSpan.textContent = `Reverted ${n} lines`;
-      toast(`Reverted ${n} lines`);
-      await refreshHeader();
-      await list();
-    } }, 'Undo'),
-    findResSpan
-  );
+      if (last < clean.length) nodes.push(clean.slice(last));
+      return nodes.length ? nodes : [clean];
+    };
+
+    const refreshMatches = () => {
+      S.frFind = findInp.value;
+      S.frReplace = repInp.value;
+      const qStr = findInp.value;
+      if (!qStr) {
+        matchedEntries = [];
+        countLbl.textContent = 'MATCHES: 0 LINES — Enter a search term above';
+        listBox.replaceChildren();
+        return;
+      }
+      const re = P.buildFindRegex(qStr, { regex: chkRegex.checked, matchCase: chkCase.checked, exactMatch: chkExact.checked });
+      if (!re) {
+        matchedEntries = [];
+        countLbl.textContent = 'INVALID REGEX PATTERN';
+        listBox.replaceChildren();
+        return;
+      }
+      const tgtField = scopeSel.value;
+      matchedEntries = [];
+      for (const e of allScopeEntries) {
+        if (chkTransOnly.checked && (!e.tgt || !e.tgt.trim())) continue;
+        if (tgtField === 'speaker') {
+          const spk = e.tgtName || e.name || '';
+          if (P.countSafeMatches(spk, re) > 0) matchedEntries.push(e);
+        } else if (tgtField === 'tgt') {
+          if (e.tgt && P.countSafeMatches(e.tgt, re) > 0) matchedEntries.push(e);
+        } else if (tgtField === 'src') {
+          if (e.src && P.countSafeMatches(e.src, re) > 0) matchedEntries.push(e);
+        } else {
+          if ((e.tgt && P.countSafeMatches(e.tgt, re) > 0) || (e.src && P.countSafeMatches(e.src, re) > 0)) {
+            matchedEntries.push(e);
+          }
+        }
+      }
+
+      const activeCount = matchedEntries.filter(e => !excludedIds.has(e.id)).length;
+      countLbl.textContent = excludedIds.size
+        ? `MATCHES: ${matchedEntries.length} LINES (${activeCount} ACTIVE)`
+        : `MATCHES: ${matchedEntries.length} LINES`;
+
+      const shown = matchedEntries.slice(0, 150);
+      const cards = shown.map(e => {
+        const isEx = excludedIds.has(e.id);
+        const fname = fileMap.get(e.fid) || 'script';
+        const spkLabel = e.tgtName || (e.name && e.name !== 'Narasi' ? e.name : 'Narration');
+        const primaryText = tgtField === 'speaker'
+          ? (e.tgtName || e.name || '')
+          : (tgtField === 'src' ? e.src : (e.tgt && P.countSafeMatches(e.tgt, re) > 0 ? e.tgt : e.src));
+        const baseForReplace = tgtField === 'speaker' ? (e.tgtName || e.name || '') : (e.tgt || '');
+        const previewOut = baseForReplace
+          ? P.stripAllTagsForAi(P.replaceSafeSegments(baseForReplace, re, repInp.value, { preserveCase: chkPreserve.checked }).out)
+          : '(untranslated)';
+
+        return h('div', { class: 'fr-card' + (isEx ? ' excluded' : '') },
+          h('div', { class: 'fr-card-hdr' },
+            h('span', {
+              style: 'cursor:pointer',
+              title: 'Click to jump to this line in 01 BACKLOG',
+              onclick: () => { bg.remove(); jumpToGid(e.gid); }
+            }, `#${String(e.gid).padStart(6, '0')} · ${fname} · [${spkLabel}]`),
+            h('button', {
+              class: 'sm',
+              title: isEx ? 'Include this line in Replace All' : 'Exclude this line from Replace All',
+              onclick: ev => {
+                ev.stopPropagation();
+                if (excludedIds.has(e.id)) excludedIds.delete(e.id);
+                else excludedIds.add(e.id);
+                refreshMatches();
+              }
+            }, isEx ? 'Include' : 'Exclude ×')
+          ),
+          h('div', { class: 'fr-line' }, h('span', { class: 'dim', style: 'font:600 11px var(--mono);margin-right:6px' }, 'BEFORE:'), ...renderHighlighted(primaryText, re)),
+          h('div', { class: 'fr-divider' }),
+          h('div', { class: 'fr-line dim' }, h('span', { style: 'font:600 11px var(--mono);margin-right:12px;color:var(--mint)' }, 'AFTER:'), previewOut)
+        );
+      });
+      if (matchedEntries.length > 150) {
+        cards.push(h('div', { class: 'dim', style: 'text-align:center;padding:6px' }, `... and ${matchedEntries.length - 150} more matching lines (included in Replace All).`));
+      }
+      listBox.replaceChildren(...cards);
+    };
+
+    let ft;
+    findInp.addEventListener('input', () => { clearTimeout(ft); ft = setTimeout(refreshMatches, 100); });
+    repInp.addEventListener('input', () => { clearTimeout(ft); ft = setTimeout(refreshMatches, 100); });
+
+    const bg = h('div', { id: 'fr-modal', class: 'modal-bg', onclick: e => { if (e.target === bg) bg.remove(); } },
+      h('div', { class: 'modal', style: 'max-width:860px' },
+        h('div', { class: 'modal-h', style: 'justify-content:space-between' },
+          h('b', { style: 'font:700 13px var(--mono);letter-spacing:1px;color:var(--amber)' }, 'SYSTEM // FIND & REPLACE'),
+          h('button', { class: 'sm', onclick: () => bg.remove() }, 'Close ×')
+        ),
+        h('div', { class: 'modal-b', style: 'font-family:var(--sans)' },
+          h('div', { class: 'fr-sec' },
+            h('div', { class: 'row', style: 'margin-bottom:8px' },
+              findInp,
+              repInp,
+              scopeSel,
+              h('button', {
+                class: 'pri',
+                onclick: async () => {
+                  if (!findInp.value) return toast('Enter text to find');
+                  const r = await P.replaceInTranslations(store, proj.id, {
+                    findText: findInp.value,
+                    replaceText: repInp.value,
+                    fid: S.fid || undefined,
+                    folder: S.folder || undefined,
+                    targetField: scopeSel.value,
+                    regex: chkRegex.checked,
+                    matchCase: chkCase.checked,
+                    preserveCase: chkPreserve.checked,
+                    exactMatch: chkExact.checked,
+                    translatedOnly: chkTransOnly.checked,
+                    excludeIds: excludedIds
+                  });
+                  if (!r.replacedEntries) return toast('No matching translations to replace');
+                  markQcDirty();
+                  proj = await store.get('projects', proj.id);
+                  const fresh = await P.listEntries(store, proj.id, { fid: S.fid || undefined, folder: S.folder || undefined });
+                  allScopeEntries.length = 0;
+                  allScopeEntries.push(...fresh);
+                  toast(`Replaced ${r.occurrences} occurrences across ${r.replacedEntries} lines`);
+                  refreshMatches();
+                  await list();
+                }
+              }, 'Replace All'),
+              h('button', {
+                class: 'danger sm',
+                onclick: async () => {
+                  const n = await P.undoApply(store, proj.id);
+                  if (!n) return toast('Nothing to undo');
+                  markQcDirty();
+                  proj = await store.get('projects', proj.id);
+                  const fresh = await P.listEntries(store, proj.id, { fid: S.fid || undefined, folder: S.folder || undefined });
+                  allScopeEntries.length = 0;
+                  allScopeEntries.push(...fresh);
+                  toast(`Reverted ${n} lines`);
+                  refreshMatches();
+                  await refreshHeader();
+                  await list();
+                }
+              }, 'Undo'),
+              h('button', {
+                class: 'sm',
+                onclick: () => {
+                  findInp.value = ''; repInp.value = '';
+                  chkRegex.checked = false; chkCase.checked = false; chkPreserve.checked = true;
+                  chkExact.checked = false; chkTransOnly.checked = false;
+                  scopeSel.value = 'all';
+                  excludedIds.clear();
+                  refreshMatches();
+                }
+              }, 'Reset')
+            ),
+            h('div', { class: 'row', style: 'margin-bottom:0' },
+              h('label', { class: 'pill-chk' }, chkPreserve, 'Preserve Case'),
+              h('label', { class: 'pill-chk' }, chkCase, 'Match Case'),
+              h('label', { class: 'pill-chk' }, chkExact, 'Whole Word'),
+              h('label', { class: 'pill-chk' }, chkRegex, 'Regex'),
+              h('label', { class: 'pill-chk' }, chkTransOnly, 'Translated Only')
+            )
+          ),
+          h('div', { class: 'row', style: 'justify-content:space-between;margin:8px 0' },
+            countLbl,
+            h('div', { class: 'row', style: 'margin:0' },
+              h('button', { class: 'sm', onclick: () => { excludedIds.clear(); refreshMatches(); } }, 'Include All'),
+              h('button', { class: 'sm', onclick: () => { matchedEntries.forEach(e => excludedIds.add(e.id)); refreshMatches(); } }, 'Exclude All')
+            )
+          ),
+          listBox
+        )
+      )
+    );
+    document.body.append(bg);
+    findInp.focus();
+    if (findInp.value) refreshMatches();
+  };
 
   const chips = h('div', { class: 'row' },
     statusItems.map(([k, l]) => h('button', { class: 'chip' + (S.status === k ? ' on' : ''), onclick: () => { S.status = k; S.page = 1; render(); } }, l)),
     h('button', { class: 'chip' + (S.q.toLowerCase() === 'choice' ? ' on' : ''), title: 'Filter only branching choice options (Choice / Pilihan)', onclick: () => { S.q = S.q.toLowerCase() === 'choice' ? '' : 'Choice'; S.page = 1; render(); } }, 'Choices'),
-    h('button', { class: 'chip' + (S.showFindReplace ? ' on' : ''), style: 'margin-left:auto', onclick: () => { S.showFindReplace = !S.showFindReplace; findBar.hidden = !S.showFindReplace; } }, 'Find & Replace'),
+    h('button', { class: 'chip', style: 'margin-left:auto', onclick: () => openFindReplaceModal() }, 'Find & Replace'),
     h('label', { class: 'pill-chk', title: 'Show live Visual Novel message box preview while editing' }, prevChk, 'VN Box Preview'),
     h('label', { class: 'pill-chk', title: 'Hide <T#> tags and reattach them automatically on save' }, hideTagsChk, 'Auto-tag')
   );
@@ -393,7 +588,7 @@ async function renderEdit(v) {
   };
 
   const box = h('div');
-  v.append(h('div', { class: 'row' }, ...scopeCtrls, q), chips, findBar, previewWrap, box);
+  v.append(h('div', { class: 'row' }, ...scopeCtrls, q, clearQBtn), chips, previewWrap, box);
 
   async function jumpToGid(targetGid) {
     if (!targetGid || targetGid < 1) return;
@@ -418,6 +613,7 @@ async function renderEdit(v) {
   }
 
   async function list(focusGid = null) {
+    const mySeq = ++listSeq;
     const pgRes = await P.listEntriesPage(store, proj.id, {
       fid: rfids && rfids.length === 1 ? rfids[0] : undefined,
       fids: rfids && rfids.length > 1 ? rfids : undefined,
@@ -426,6 +622,7 @@ async function renderEdit(v) {
       offset: (S.page - 1) * PAGE,
       limit: PAGE
     });
+    if (mySeq !== listSeq) return;
     const total = pgRes.total;
     const totalPages = Math.max(1, Math.ceil(total / PAGE));
     if (S.page > totalPages) S.page = totalPages;
@@ -1088,8 +1285,7 @@ async function renderFiles(v) {
   } });
 
   const drop = h('label', { class: 'drop' }, input,
-    h('div', {}, h('b', {}, 'Drop script files or a folder here'), ' or click to browse'),
-    h('div', { class: 'dim' }, '.ks · .txt (auto Kirikiri / Artemis) · .ast · .scn · VNTP .json')
+    h('div', {}, h('b', {}, 'Drop script files or a folder here'), ' or click to browse')
   );
   drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
   drop.addEventListener('dragleave', () => drop.classList.remove('over'));
@@ -1104,6 +1300,27 @@ async function renderFiles(v) {
     }
   });
 
+  const fmtPop = h('div', { class: 'prog-box', hidden: !S.showFormatsPop, style: 'margin-top:0;margin-bottom:10px' },
+    h('div', { class: 'row', style: 'justify-content:space-between;margin-bottom:6px' },
+      h('b', { style: 'font:600 12px var(--mono);color:var(--amber);letter-spacing:.6px' }, 'SUPPORTED SCRIPT ENGINES & FORMATS'),
+      h('button', { class: 'sm', onclick: () => { S.showFormatsPop = false; fmtPop.hidden = true; fmtBtn.className = 'chip'; } }, '×')
+    ),
+    h('div', { class: 'opt-group' },
+      h('span', { class: 'badge k-dialog' }, 'Kirikiri / KAG: .ks · .txt · .scn (PSB / MDF)'),
+      h('span', { class: 'badge k-dialog' }, 'Artemis Engine: .ast · .txt'),
+      h('span', { class: 'badge k-narasi' }, 'VNTextPatch: .json')
+    )
+  );
+  const fmtBtn = h('button', {
+    class: 'chip' + (S.showFormatsPop ? ' on' : ''),
+    title: 'View supported Visual Novel engines and script formats',
+    onclick: () => {
+      S.showFormatsPop = !S.showFormatsPop;
+      fmtPop.hidden = !S.showFormatsPop;
+      fmtBtn.className = 'chip' + (S.showFormatsPop ? ' on' : '');
+    }
+  }, '? Formats');
+
   v.append(
     drop,
     h('div', { class: 'row' },
@@ -1111,8 +1328,10 @@ async function renderFiles(v) {
       h('button', { onclick: () => input.click() }, 'Add Files'),
       h('button', { onclick: () => dryDirInput.click(), title: 'Test all files in a folder and view logs without saving' }, 'Dry-Run Folder'),
       h('label', { class: 'pill-chk', style: 'margin-left:auto', title: 'For VNTP .json files: skip repeated chapter/bookmark labels (3+ occurrences)' }, flt, 'Filter repeated bookmarks (VNTP .json)'),
+      fmtBtn,
       dirInput, dryDirInput
     ),
+    fmtPop,
     progHolder
   );
 
@@ -1534,15 +1753,41 @@ async function renderSettings(v) {
           toast('Checking for updates...');
           try {
             await swReg.update();
+            if (swReg.installing) {
+              await new Promise(resolve => {
+                const w = swReg.installing;
+                if (!w) return resolve();
+                w.addEventListener('statechange', () => {
+                  if (w.state === 'installed' || w.state === 'activated' || w.state === 'redundant') resolve();
+                });
+                setTimeout(resolve, 4000);
+              });
+            }
             if (swReg.waiting) {
-              toast('New version found, reloading...');
+              toast('New version found — applying update...');
               swReg.waiting.postMessage('SKIP_WAITING');
-              setTimeout(() => location.reload(), 500);
+              setTimeout(() => location.reload(), 400);
             } else {
-              toast('Already on the latest version (KOPIPE v1.0.0)');
+              toast(`Already on the latest version (KOPIPE v${P.APP_VERSION || '1.2.1'})`);
             }
           } catch (e) { toast('Update check failed'); }
         } }, 'Check for Updates'),
+        h('button', {
+          title: 'Clear cached app shell files and reload directly from server (your projects and translations in IndexedDB are untouched)',
+          onclick: async () => {
+            toast('Clearing app cache and reloading...');
+            try {
+              if (window.caches) {
+                const ks = await caches.keys();
+                await Promise.all(ks.map(k => caches.delete(k)));
+              }
+              if (swReg) {
+                await swReg.unregister();
+              }
+            } catch (e) { /* ignore */ }
+            location.reload();
+          }
+        }, 'Force Reload Cache'),
         h('button', { class: 'danger', style: 'margin-left:auto', onclick: async () => { if (confirm(`Delete project "${proj.name}" and all its data?`)) { await P.deleteProject(store, proj.id); await openProject(null); } } }, 'Delete Project')
       ),
       stor
@@ -1845,7 +2090,10 @@ async function renderKamus(v) {
     navigator.serviceWorker.addEventListener('controllerchange', () => {
       if (hadController && !reloading) { reloading = true; location.reload(); }
     });
-    navigator.serviceWorker.register('./sw.js').then(reg => {
+    navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).then(reg => {
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') reg.update().catch(() => {});
+      });
       swReg = reg;
       const offer = w => {
         const btn = $('#upd');

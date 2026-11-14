@@ -18,14 +18,28 @@ export function uid() {
   return (globalThis.crypto && crypto.randomUUID) ? crypto.randomUUID() : 'id-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
 }
 
+function buildSearchHaystack(e) {
+  const isCh = e.kind === 'C' || (e.name || '').toLowerCase() === 'choice';
+  const rawSrc = e.src || '';
+  const rawTgt = e.tgt || '';
+  const cleanSrc = rawSrc.indexOf('<') >= 0 ? rawSrc.replace(/<T\d+>/g, '').replace(/<BR>/g, ' ').replace(/\s{2,}/g, ' ') : '';
+  const cleanTgt = rawTgt.indexOf('<') >= 0 ? rawTgt.replace(/<T\d+>/g, '').replace(/<BR>/g, ' ').replace(/\s{2,}/g, ' ') : '';
+  const gidStr = e.gid ? `#${e.gid} #${String(e.gid).padStart(6, '0')}` : '';
+  return (
+    rawSrc + ' ' + cleanSrc + ' ' +
+    rawTgt + ' ' + cleanTgt + ' ' +
+    (e.name || '') + ' ' + (e.tgtName || '') + ' ' +
+    gidStr + (isCh ? ' choice pilihan select' : '')
+  ).toLowerCase();
+}
+
 function matchEntryFilter(e, { fid, fidSet, status, qLow, gidFrom }) {
   if (fid && e.fid !== fid) return false;
   if (fidSet && !fidSet.has(e.fid)) return false;
   if (status && e.status !== status) return false;
   if (gidFrom && e.gid < gidFrom) return false;
   if (qLow) {
-    const isCh = e.kind === 'C' || (e.name || '').toLowerCase() === 'choice';
-    const hay = (e._q || ((e.src || '') + ' ' + (e.tgt || '') + ' ' + (e.name || '') + ' ' + (e.tgtName || '')).toLowerCase()) + (isCh ? ' choice pilihan select' : '');
+    const hay = buildSearchHaystack(e);
     if (!hay.includes(qLow)) return false;
   }
   return true;
@@ -46,7 +60,7 @@ export function createMemoryStore() {
     async queryEntries(pid, opts = {}) {
       const { fid, fids, status, q, gidFrom = 0, offset = 0, limit = 0, knownTotal } = opts;
       const fidSet = fids && fids.length ? new Set(fids) : null;
-      const qLow = q ? q.toLowerCase() : '';
+      const qLow = q ? q.trim().toLowerCase() : '';
       const all = [];
       for (const r of t.entries.values()) {
         if (r.pid !== pid) continue;
@@ -104,7 +118,7 @@ export function createIdbStore(name = 'kopipe') {
     queryEntries: (pid, opts = {}) => run(['entries'], 'readonly', tx => new Promise((res, rej) => {
       const { fid, fids, status, q, gidFrom = 0, offset = 0, limit = 0, knownTotal } = opts;
       const fidSet = fids && fids.length ? new Set(fids) : null;
-      const qLow = q ? q.toLowerCase() : '';
+      const qLow = q ? q.trim().toLowerCase() : '';
       const os = tx.objectStore('entries');
 
       // Fast indexed cursor path when no text filter or multi-file set filter is needed
@@ -141,7 +155,7 @@ export function createIdbStore(name = 'kopipe') {
         return;
       }
 
-      // Indexed cursor scan in gid order (avoids loading + sorting all records when possible)
+      // Single bulk getAll() call on index (avoids 37,000+ sequential cursor IPC round-trips)
       let idx, range;
       if (fid && os.indexNames.contains('fid_gid')) {
         idx = os.index('fid_gid');
@@ -157,28 +171,19 @@ export function createIdbStore(name = 'kopipe') {
         range = IDBKeyRange.only(pid);
       }
 
-      const items = [];
-      let matched = 0;
-      const needFullCount = knownTotal == null || !!qLow || !!gidFrom;
-      const req = idx.openCursor(range);
+      const req = idx.getAll(range);
       req.onsuccess = () => {
-        const cur = req.result;
-        if (!cur) {
-          res({ items, total: needFullCount ? matched : knownTotal });
-          return;
-        }
-        const val = cur.value;
-        if (matchEntryFilter(val, { fid, fidSet, status, qLow, gidFrom })) {
-          if (matched >= offset && (limit <= 0 || items.length < limit)) {
-            items.push(val);
-          }
-          matched++;
-          if (!needFullCount && limit > 0 && items.length >= limit) {
-            res({ items, total: knownTotal });
-            return;
+        const raw = req.result || [];
+        const matched = [];
+        for (let i = 0; i < raw.length; i++) {
+          const val = raw[i];
+          if (matchEntryFilter(val, { fid, fidSet, status, qLow, gidFrom })) {
+            matched.push(val);
           }
         }
-        cur.continue();
+        const total = knownTotal != null && !qLow && !gidFrom ? knownTotal : matched.length;
+        const items = limit > 0 ? matched.slice(offset, offset + limit) : (offset > 0 ? matched.slice(offset) : matched);
+        res({ items, total });
       };
       req.onerror = () => rej(req.error);
     })),

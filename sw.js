@@ -1,5 +1,5 @@
 // KOPIPE service worker – cache-first app shell, versioned. Bump VERSION on every release.
-const VERSION = 'kopipe-v1.1.3';
+const VERSION = 'kopipe-v1.2.1';
 const SHELL = [
   './', './index.html', './manifest.json', './app.js',
   './core/util.js', './core/db.js', './core/qc.js', './core/backup.js', './core/project.js', './core/zip.js', './core/log.js',
@@ -8,7 +8,21 @@ const SHELL = [
   './core/engines/artemis.js', './core/engines/scn.js', './core/engines/vntp.js',
   './icons/icon.svg', './icons/vn-bg.svg'
 ];
-self.addEventListener('install', e => { e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL))); });
+self.addEventListener('install', e => {
+  e.waitUntil(
+    caches.open(VERSION).then(async c => {
+      try {
+        await Promise.all(SHELL.map(async u => {
+          const r = await fetch(new Request(u, { cache: 'reload' }));
+          if (r.ok) await c.put(u, r);
+          else await c.add(u);
+        }));
+      } catch (err) {
+        await c.addAll(SHELL);
+      }
+    })
+  );
+});
 self.addEventListener('activate', e => {
   e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== VERSION).map(k => caches.delete(k)))).then(() => self.clients.claim()));
 });
