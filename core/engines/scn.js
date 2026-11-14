@@ -714,7 +714,7 @@ function scnXorDetect(raw, opts){
   throw new Error(xorFailMsg);
 }
 
-var SCN_PATCH_NAMES_D = false;
+var SCN_PATCH_NAMES_D = true;
 function scnMaskNl(msg){
   var tl=[],n=0;
   var re = cfg.maskJpQuotes ? /%[^;]+;|\[.*?\]|[「」『』]|\\n/g : /%[^;]+;|\[.*?\]|\\n/g;
@@ -1558,6 +1558,32 @@ function repackScnImpl(origBuf, tagStore, translations, wrapWidth, nlStr, allowW
   }
 
   var baseCount = stringCount;
+  var name2ByMsgOff = new Map();
+  if(psb.root && psb.root.kind === 'objects'){
+    var scVal = psbObjValueByName(psb, psb.root.obj, 'scenes');
+    if(scVal && scVal.kind === 'collection'){
+      var scCnt = psbCollectionSize(scVal.col);
+      for(var sci0=0; sci0<scCnt; sci0++){
+        var sc0 = psbColValue(psb, scVal.col, sci0);
+        if(!sc0 || sc0.kind !== 'objects') continue;
+        var tx0 = psbObjValueByName(psb, sc0.obj, 'texts');
+        if(!tx0 || tx0.kind !== 'collection') continue;
+        var tn0 = psbCollectionSize(tx0.col);
+        for(var ti0=0; ti0<tn0; ti0++){
+          var tp0 = psbColValue(psb, tx0.col, ti0);
+          if(!tp0 || tp0.kind !== 'collection' || psbCollectionSize(tp0.col) < 3) continue;
+          var n2Node = psbColValue(psb, tp0.col, 1);
+          var mNode = psbColValue(psb, tp0.col, 2);
+          if(n2Node && n2Node.kind === 'string' && mNode && mNode.kind === 'string'){
+            var n2Str = psbResolve(psb, n2Node);
+            if(n2Str && n2Str.trim()){
+              name2ByMsgOff.set(mNode.byteOffset, { idx: n2Node.index, off: n2Node.byteOffset, w: n2Node.byteWidth });
+            }
+          }
+        }
+      }
+    }
+  }
 
   for(var di=0; di<desired.length; di++){
     var d = desired[di], store = d.store;
@@ -1594,19 +1620,29 @@ function repackScnImpl(origBuf, tagStore, translations, wrapWidth, nlStr, allowW
       }
     }
     if(store.nameIdx!=null && store.nameIdx>=0 && store.nameIdx<baseCount &&
-      d.newName && d.newName.trim() && d.newName.toLowerCase()!=='narasi' &&
-      d.newName !== psbStr(psb, store.nameIdx)){
+      d.newName && d.newName.trim() && d.newName.toLowerCase()!=='narasi'){
+      var nameTargets = [];
       if(store.nameIdxOffset!=null && store.nameIdxWidth!=null){
-        var nIdx = nameSlotMap.get(d.newName);
-        if(nIdx===undefined){ nIdx = baseCount + extraSlots.length; nameSlotMap.set(d.newName, nIdx); extraSlots.push(d.newName); }
-        var nMax = Math.pow(256, store.nameIdxWidth) - 1, nWiden = false;
-        if(nIdx > nMax){
-          if(allowWiden) nWiden = true;
-          else { nameWarn.push('Entry "'+d.idx+'": node nama 1-byte gak muat slot baru, nama dibiarkan asli.'); continue; }
+        if(d.newName !== psbStr(psb, store.nameIdx)){
+          nameTargets.push({ idx: store.nameIdx, off: store.nameIdxOffset, w: store.nameIdxWidth });
         }
-        patches.push({byteOffset:store.nameIdxOffset, byteWidth:store.nameIdxWidth, newIndex:nIdx, widen:nWiden});
-        nameSplit++;
-      } else {
+        var extraN2 = store.msgIdxOffset != null ? name2ByMsgOff.get(store.msgIdxOffset) : null;
+        if(extraN2 && extraN2.off !== store.nameIdxOffset && d.newName !== psbStr(psb, extraN2.idx)){
+          nameTargets.push(extraN2);
+        }
+        for(var nti=0; nti<nameTargets.length; nti++){
+          var nt = nameTargets[nti];
+          var nIdx = nameSlotMap.get(d.newName);
+          if(nIdx===undefined){ nIdx = baseCount + extraSlots.length; nameSlotMap.set(d.newName, nIdx); extraSlots.push(d.newName); }
+          var nMax = Math.pow(256, nt.w) - 1, nWiden = false;
+          if(nIdx > nMax){
+            if(allowWiden) nWiden = true;
+            else { nameWarn.push('Entry "'+d.idx+'": node nama 1-byte gak muat slot baru, nama dibiarkan asli.'); continue; }
+          }
+          patches.push({byteOffset:nt.off, byteWidth:nt.w, newIndex:nIdx, widen:nWiden});
+          nameSplit++;
+        }
+      } else if(d.newName !== psbStr(psb, store.nameIdx)) {
         newVals[store.nameIdx] = d.newName;
         legacyName++;
       }

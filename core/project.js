@@ -3,12 +3,12 @@ import { uid } from './db.js';
 import { importScript, exportScript } from './engines/index.js';
 import { LINE_RE, parseBatchUnified, formatBatchLine, formatFileHeader, padGlobalId, detectEntryKind, isNarrationSpeaker, isChoiceSpeaker } from './batch.js';
 export { isNarrationSpeaker, isChoiceSpeaker };
-import { sortGls } from './util.js';
+import { sortGls, applyGls } from './util.js';
 import { analyzeTagSafety, stripTagsForAi, fixTags, validate, glossaryRules, CRIT_TYPES } from './qc.js';
 import { matchVndb, buildGls } from './vndb.js';
 import { createLog, summarizeLog, formatLog } from './log.js';
 
-export const APP_VERSION = '1.2.1';
+export const APP_VERSION = '1.2.2';
 export const SCHEMA_VERSION = 2;
 export const STATUS = ['todo', 'draft', 'done', 'flag'];
 export const SCRIPT_EXTS = ['.ks', '.txt', '.ast', '.scn', '.json'];
@@ -730,13 +730,18 @@ export async function repackFile(store, fid, opts = {}) {
   const blob = await getFileBlob(store, f);
   const es = await store.where('entries', 'fid', fid), trans = {};
   const p = await store.get('projects', f.pid), qm = p.settings.quoteMode || 'keep';
+  const sg = sortGls((p && p.glossary) || {});
   // ks / Artemis .txt keep attribute values (sel01 text="...") safe: only lines whose SOURCE used 「 」 『 』 are converted there.
   const guarded = f.kind === 'ks' || f.kind === 'artemis-txt';
   for (const e of es) {
     if (e.tgt && e.tgt.trim()) {
       const spacedTgt = fixTagSpacing(e.tgt);
       const safeTgt = checkTags(e.src, spacedTgt) ? spacedTgt : fixTags(e.src, spacedTgt);
-      trans[e.idx] = [e.tgtName || 'Narasi', (!guarded || /[「」『』]/.test(e.src)) ? convertJpQuotes(safeTgt, qm) : safeTgt];
+      const rawSpk = (e.tgtName && e.tgtName.trim())
+        ? e.tgtName.trim()
+        : ((e.name && !isNarrationSpeaker(e.name) && !isChoiceSpeaker(e.name) && e.name !== 'Dialog') ? e.name.trim() : '');
+      const spkOut = rawSpk ? (sg.length ? applyGls(rawSpk, sg) : rawSpk) : 'Narasi';
+      trans[e.idx] = [spkOut, (!guarded || /[「」『』]/.test(e.src)) ? convertJpQuotes(safeTgt, qm) : safeTgt];
     }
   }
   const log = opts.log || (f.kind === 'scn' ? createLog({ cap: 500, meta: { name: f.name, path: f.path || f.name, size: blob.bytes ? blob.bytes.length : 0, kind: f.kind } }) : null);

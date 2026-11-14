@@ -1,5 +1,5 @@
 // KOPIPE service worker – cache-first app shell, versioned. Bump VERSION on every release.
-const VERSION = 'kopipe-v1.2.1';
+const VERSION = 'kopipe-v1.2.2';
 const SHELL = [
   './', './index.html', './manifest.json', './app.js',
   './core/util.js', './core/db.js', './core/qc.js', './core/backup.js', './core/project.js', './core/zip.js', './core/log.js',
