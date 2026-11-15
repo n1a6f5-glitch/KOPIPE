@@ -8,7 +8,7 @@ import { analyzeTagSafety, stripTagsForAi, fixTags, validate, glossaryRules, CRI
 import { matchVndb, buildGls } from './vndb.js';
 import { createLog, summarizeLog, formatLog } from './log.js';
 
-export const APP_VERSION = '1.2.6';
+export const APP_VERSION = '1.2.7';
 export const SCHEMA_VERSION = 2;
 export const STATUS = ['todo', 'draft', 'done', 'flag'];
 export const SCRIPT_EXTS = ['.ks', '.txt', '.ast', '.scn', '.json'];
@@ -1049,17 +1049,33 @@ export async function reapplyGlossary(store, pid) {
     const blob = await getFileBlob(store, f);
     const hint = f.kind === 'artemis-txt' ? 'artemis' : f.kind === 'txt' ? 'kirikiri' : 'auto';
     const ex = await importScript(f.name, blob.bytes, { sg, txtHint: hint, vntpFilter: !!(f.meta && f.meta.filter) });
-    const es = new Map((await store.where('entries', 'fid', f.id)).map(e => [e.idx, e])), upd = [];
+    const es = new Map((await store.where('entries', 'fid', f.id)).map(e => [e.idx, e])), upd = [], spkUpd = [];
+    let blobDirty = false;
     for (const l of ex.lines) {
       const m = LINE_RE.exec(l); if (!m) continue;
-      const e = es.get(m[1]); if (!e || (e.tgt && e.tgt.trim()) || e.status !== 'todo') continue;
+      const e = es.get(m[1]); if (!e) continue;
+      if (ex.tagStore[m[1]] && blob.tagStore && blob.tagStore[m[1]] && blob.tagStore[m[1]].nameIdx == null && ex.tagStore[m[1]].nameIdx != null) {
+        blob.tagStore[m[1]].nameIdx = ex.tagStore[m[1]].nameIdx;
+        blob.tagStore[m[1]].nameIdxOffset = ex.tagStore[m[1]].nameIdxOffset;
+        blob.tagStore[m[1]].nameIdxWidth = ex.tagStore[m[1]].nameIdxWidth;
+        blobDirty = true;
+      }
+      if ((e.tgt && e.tgt.trim()) || e.status !== 'todo') {
+        if (!(e.tgtName && e.tgtName.trim()) && e.name !== m[2]) {
+          e.name = m[2];
+          spkUpd.push(e);
+        }
+        continue;
+      }
       const body = m[4] || '';
-      if (e.src !== body || e.name !== m[2]) { e.src = body; e.name = m[2]; upd.push(e); if (ex.tagStore[m[1]]) blob.tagStore[m[1]] = ex.tagStore[m[1]]; }
+      if (e.src !== body || e.name !== m[2]) { e.src = body; e.name = m[2]; upd.push(e); if (ex.tagStore[m[1]]) { blob.tagStore[m[1]] = ex.tagStore[m[1]]; blobDirty = true; } }
     }
-    if (upd.length) {
-      await putEntriesChunked(store, upd);
-      await store.put('blobs', blob);
+    if (upd.length || spkUpd.length) {
+      await putEntriesChunked(store, [...upd, ...spkUpd]);
       changed += upd.length;
+    }
+    if (upd.length || blobDirty) {
+      await store.put('blobs', blob);
     }
   }
   return changed;
