@@ -1345,7 +1345,7 @@ function scnScaleDownFontTags(tl, targetScale){
 
 function scnUnmask(text, tl, label, warnings, lost){
   var used={};
-  var safePct=String(text||'').replace(/%/g,'\uFF05');
+  var safePct=String(text||'').replace(/(\d\s*)%(?!\d*;)/g,'$1\uFF05');
   var spaced=safePct.replace(/([A-Za-z0-9])((?:<T\d+>)+)(?=[A-Za-z0-9])/g,'$1 $2');
   var out=spaced.replace(/<T(\d+)>/g,function(m,n){
     var i=parseInt(n,10)-1;

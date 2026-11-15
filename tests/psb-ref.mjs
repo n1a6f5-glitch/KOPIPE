@@ -325,12 +325,13 @@ function roundTrip(label, raw, wrap) {
   ]));
   const exPct = extractFromScn(pctPsb, []);
   const repPct = repackScn(pctPsb, exPct.tagStore, {
-    0: ['Kai', '"Ever since you started writing them, customer traffic has gone up by 30%!"']
+    0: ['Kai', '%CSeven. "Ever since you started writing them, customer traffic has gone up by 30%!"']
   }, 55, '\n', { verify: true });
   assert.equal(repPct.verifyOk, true);
   const outPsb = parsePsb(repPct.buf);
   const s0 = [];
   for (let i = 0; i < outPsb.strings.entryCount; i++) s0.push(psbStr(outPsb, i));
   assert.ok(s0.some(x => x.includes('30％!"')), 'literal 30% converted to safe 30％!" in PSB');
-  console.log('ok SCN literal % -> ％ safety conversion');
+  assert.ok(s0.some(x => x.includes('%CSeven.')), 'M2 command %CSeven. preserved as ASCII %C');
+  console.log('ok SCN digit% -> ％ while preserving %C command codes');
 }
