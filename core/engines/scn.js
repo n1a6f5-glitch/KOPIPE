@@ -1298,6 +1298,51 @@ function scnIsRubyTag(tag){
   return /^\[\s*ruby\b/i.test(tag) || /^%r(?:uby)?[,;]/i.test(tag) || /^\[[\u3040-\u30FF\u30FC\u4E00-\u9FFF\s]+\]$/.test(tag);
 }
 
+function scnDetectFontScale(tl){
+  if(!tl || !tl.length) return 1;
+  var maxScale = 1;
+  for(var i=0; i<tl.length; i++){
+    var tag = tl[i] || '';
+    var mPct = /^%(?:f|size|fsize)?=?(\d{2,3})%?;/i.exec(tag);
+    if(mPct){
+      var pct = parseInt(mPct[1], 10);
+      if(pct > 105 && pct <= 400){
+        var s = pct / 100;
+        if(s > maxScale) maxScale = s;
+      }
+    }
+    var mFont = /^\[(?:font|size)\b[^\]]*\bsize\s*=\s*["']?(\d+)(%?)["']?/i.exec(tag);
+    if(mFont){
+      var val = parseInt(mFont[1], 10);
+      var s2 = mFont[2] === '%' ? (val / 100) : (val > 26 ? val / 24 : 1);
+      if(s2 > maxScale && s2 <= 4) maxScale = s2;
+    }
+  }
+  return maxScale;
+}
+
+function scnScaleDownFontTags(tl, targetScale){
+  var targetPct = Math.max(100, Math.round(targetScale * 100));
+  return tl.map(function(tag){
+    if(!tag) return tag;
+    var mPct = /^(%(?:f|size|fsize)?=?)(\d{2,3})(%?;)$/i.exec(tag);
+    if(mPct){
+      var pct = parseInt(mPct[2], 10);
+      if(pct > targetPct && pct <= 400) return mPct[1] + String(targetPct) + mPct[3];
+    }
+    var mFont = /^(\[(?:font|size)\b[^\]]*\bsize\s*=\s*["']?)(\d+)(%?)(["']?[^\]]*\])$/i.exec(tag);
+    if(mFont){
+      var val = parseInt(mFont[2], 10);
+      if(mFont[3] === '%' && val > targetPct) return mFont[1] + String(targetPct) + mFont[3] + mFont[4];
+      if(!mFont[3] && val > 26){
+        var newPx = Math.max(24, Math.round(24 * targetScale));
+        if(newPx < val) return mFont[1] + String(newPx) + mFont[4];
+      }
+    }
+    return tag;
+  });
+}
+
 function scnUnmask(text, tl, label, warnings, lost){
   var used={};
   var spaced=String(text||'').replace(/([A-Za-z0-9])((?:<T\d+>)+)(?=[A-Za-z0-9])/g,'$1 $2');
@@ -1465,7 +1510,7 @@ function verifyRepackedScn(origBuf, outBuf, tagStore, translations, wrapWidth, l
     var reMasked = m[2];
     var origTags = (tr[1].match(/<T\d+>/g) || []).filter(function(t){
       var n = parseInt(t.slice(2, -1), 10) - 1;
-      return n >= 0 && n < (store.tl ? store.tl.length : 0) && !scnIsRubyTag(store.tl[n]);
+      return n >= 0 && n < (store.tl ? store.tl.length : 0) && !scnIsRubyTag(store.tl[n]) && !(wrapWidth > 0 && store.tl[n] === '\\n');
     });
     var reTags = reMasked.match(/<T\d+>/g) || [];
     if(reTags.length < origTags.length){
@@ -1502,15 +1547,46 @@ function repackScnImpl(origBuf, tagStore, translations, wrapWidth, nlStr, allowW
     var val = translations[idx];
     if(!val || !val[1] || !String(val[1]).trim()){ skippedEmpty++; continue; }
     var newName = val[0], translatedMasked = val[1];
-    var tl = store.tl || [];
+    var tl = (store.tl || []).slice();
     var nlUse = store.nlLit || ('\n' + (store.nlIndent || ''));
+    var srcForWrap = translatedMasked;
+    if(wrapWidth > 0 && !store.isSelect && tl.length){
+      // Strip old Japanese literal \n tags (<T#>) before re-wrapping so they never collide with new word-wrap breaks
+      srcForWrap = srcForWrap.replace(/<T(\d+)>/g, function(m, n){
+        var i = parseInt(n, 10) - 1;
+        if(i >= 0 && i < tl.length && tl[i] === '\\n') return ' ';
+        return m;
+      }).replace(/  +/g, ' ').trim();
+      for(var tli=0; tli<tl.length; tli++){
+        if(tl[tli] === '\\n') tl[tli] = '[ruby]'; // mark as intentionally stripped like ruby
+      }
+    }
+    var effWrap = wrapWidth || 0;
+    if(effWrap > 0 && !store.isSelect){
+      var fScale = scnDetectFontScale(tl);
+      if(fScale > 1.05){
+        effWrap = Math.max(18, Math.floor(wrapWidth / (fScale * 1.04)));
+        var visTextLen = srcForWrap.replace(/<T\d+>/g, '').length;
+        var testWrapped = wrapText(srcForWrap, effWrap, nlUse);
+        if(testWrapped.split(nlUse).length > 2){
+          // Sentence is too long to fit in 2 lines at large font size; scale down font tag so it never clips line 3
+          if(visTextLen <= Math.floor(wrapWidth * 1.65)){
+            tl = scnScaleDownFontTags(tl, 1.15);
+            effWrap = Math.max(24, Math.floor(wrapWidth / 1.18));
+          } else {
+            tl = scnScaleDownFontTags(tl, 1.0);
+            effWrap = wrapWidth;
+          }
+        }
+      }
+    }
     var wrapped = store.isSelect
-      ? (store.nlReal ? scnWrapToLines(translatedMasked, store.nlReal, nlUse) : translatedMasked)
-      : ((store.nlReal && !(wrapWidth>0)) ? scnWrapToLines(translatedMasked, store.nlReal, nlUse) : wrapText(translatedMasked, wrapWidth||0, nlUse));
+      ? (store.nlReal ? scnWrapToLines(srcForWrap, store.nlReal, nlUse) : srcForWrap)
+      : ((store.nlReal && !(effWrap>0)) ? scnWrapToLines(srcForWrap, store.nlReal, nlUse) : wrapText(srcForWrap, effWrap, nlUse));
     if(wrapped !== translatedMasked) wrappedLines++;
-    if(wrapWidth > 0 && !store.isSelect){
+    if(effWrap > 0 && !store.isSelect){
       var segs = wrapped.split(nlUse);
-      if(segs.some(function(sg){ return sg.replace(/<T\d+>/g, '').length > wrapWidth; })) exceedingWidth++;
+      if(segs.some(function(sg){ return sg.replace(/<T\d+>/g, '').length > effWrap; })) exceedingWidth++;
     }
     var unmasked = scnUnmask(wrapped, tl, idx, tagWarn, tagLost);
     desired.push({idx:idx, store:store, text:unmasked, newName:newName});

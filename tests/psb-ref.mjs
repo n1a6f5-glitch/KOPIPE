@@ -286,3 +286,30 @@ function roundTrip(label, raw, wrap) {
   }
   console.log('ok SCN choices (selects[i].text + selectInfo.select[i].text + selectInfo.select[i].runLineStr) round-trip');
 }
+
+{
+  // 7. SCN large font tag (%140;) auto-scales effective wrapWidth so 63-char sentence wraps at <=38 chars (2 lines, no char-41 mid-word break)
+  const bigFontPsb = buildPsb(O([
+    ['scenes', C(O([
+      ['texts', C(
+        C(S('ツミ'), C(C(I(1), S('%140;初めてのエッチは\n好きな人としたい%100;'), NUL, S('初めてのエッチは 好きな人としたい'))))
+      )]
+    ]))]
+  ]));
+  const exBig = extractFromScn(bigFontPsb, []);
+  assert.equal(exBig.entryCount, 1);
+  // Translate with <T1> (%140;), <T2> (\n), <T3> (%100;) and wrapWidth = 55
+  const repBig = repackScn(bigFontPsb, exBig.tagStore, {
+    0: ['Tsumi', '<T1>I want my first time having sex to be with someone <T2>I love, too.<T3>']
+  }, 55, '\\n', { verify: true });
+  assert.equal(repBig.verifyOk, true);
+  const outPsb = parsePsb(repBig.buf);
+  const allStrings = [];
+  for (let i = 0; i < outPsb.strings.entryCount; i++) allStrings.push(psbStr(outPsb, i));
+  const msgStr = allStrings.find(s => s.includes('I want my first time'));
+  assert.ok(msgStr, 'found repacked large-font message');
+  const cleanLines = msgStr.replace(/%[^;]+;/g, '').split('\\n');
+  assert.equal(cleanLines.length, 2, 'must wrap into exactly 2 lines: ' + JSON.stringify(cleanLines));
+  assert.ok(cleanLines[0].length <= 40, 'line 1 must be <= 40 chars so engine never breaks mid-word at char 41: ' + cleanLines[0]);
+  console.log('ok SCN large-font (%140;) proportional wrapWidth:', cleanLines);
+}

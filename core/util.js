@@ -43,7 +43,7 @@ function wrapText(text,width,nl){
   for(var i=0;i<words.length;i++){
     var w=words[i];
     if(!cur){cur=w;continue}
-    if((cur+' '+w).length<=width)cur+=' '+w;
+    if((cur+' '+w).replace(/<T\d+>/g,'').length<=width)cur+=' '+w;
     else{lines.push(cur);cur=w}
   }
   if(cur)lines.push(cur);
