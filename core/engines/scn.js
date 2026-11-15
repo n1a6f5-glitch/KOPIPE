@@ -399,7 +399,11 @@ function scnStrategyA(psb){
           dialogueCount++;
         }
       }
-      var sceneSelects = scnExtractSelectsFromObj(psb, scene.obj, si, rootInfoPool);
+    }
+    for(var si2=0; si2<sceneCount; si2++){
+      var scene2 = psbColValue(psb, scenesVal.col, si2);
+      if(!scene2 || scene2.kind!=='objects') continue;
+      var sceneSelects = scnExtractSelectsFromObj(psb, scene2.obj, si2, rootInfoPool);
       for(var sci=0; sci<sceneSelects.length; sci++) entries.push(sceneSelects[sci]);
     }
   }
@@ -714,7 +718,7 @@ function scnXorDetect(raw, opts){
   throw new Error(xorFailMsg);
 }
 
-var SCN_PATCH_NAMES_D = true;
+var SCN_PATCH_NAMES_D = false;
 function scnMaskNl(msg){
   var tl=[],n=0;
   var re = cfg.maskJpQuotes ? /%[^;]+;|\[.*?\]|[「」『』]|\\n/g : /%[^;]+;|\[.*?\]|\\n/g;
@@ -762,7 +766,11 @@ function scnStrategyD(psb){
         dialogueCount++;
       }
     }
-    var sceneSelects = scnExtractSelectsFromObj(psb, scene.obj, si, rootInfoPool);
+  }
+  for(var si2=0; si2<sceneCount; si2++){
+    var scene2 = psbColValue(psb, scenesVal.col, si2);
+    if(!scene2 || scene2.kind!=='objects') continue;
+    var sceneSelects = scnExtractSelectsFromObj(psb, scene2.obj, si2, rootInfoPool);
     for(var sci=0; sci<sceneSelects.length; sci++) entries.push(sceneSelects[sci]);
   }
   if(totalTextTuples > 0 && dialogueCount === 0) return [];
@@ -1567,18 +1575,6 @@ function repackScnImpl(origBuf, tagStore, translations, wrapWidth, nlStr, allowW
       var fScale = scnDetectFontScale(tl);
       if(fScale > 1.05){
         effWrap = Math.max(18, Math.floor(wrapWidth / (fScale * 1.04)));
-        var visTextLen = srcForWrap.replace(/<T\d+>/g, '').length;
-        var testWrapped = wrapText(srcForWrap, effWrap, nlUse);
-        if(testWrapped.split(nlUse).length > 2){
-          // Sentence is too long to fit in 2 lines at large font size; scale down font tag so it never clips line 3
-          if(visTextLen <= Math.floor(wrapWidth * 1.65)){
-            tl = scnScaleDownFontTags(tl, 1.15);
-            effWrap = Math.max(24, Math.floor(wrapWidth / 1.18));
-          } else {
-            tl = scnScaleDownFontTags(tl, 1.0);
-            effWrap = wrapWidth;
-          }
-        }
       }
     }
     var wrapped = store.isSelect
@@ -1696,32 +1692,24 @@ function repackScnImpl(origBuf, tagStore, translations, wrapWidth, nlStr, allowW
         }
       }
     }
-    if(store.nameIdx!=null && store.nameIdx>=0 && store.nameIdx<baseCount &&
-      d.newName && d.newName.trim() && d.newName.toLowerCase()!=='narasi'){
-      var nameTargets = [];
-      if(store.nameIdxOffset!=null && store.nameIdxWidth!=null){
-        if(d.newName !== psbStr(psb, store.nameIdx)){
-          nameTargets.push({ idx: store.nameIdx, off: store.nameIdxOffset, w: store.nameIdxWidth });
-        }
-        var extraN2 = store.msgIdxOffset != null ? name2ByMsgOff.get(store.msgIdxOffset) : null;
-        if(extraN2 && extraN2.off !== store.nameIdxOffset && d.newName !== psbStr(psb, extraN2.idx)){
-          nameTargets.push(extraN2);
-        }
-        for(var nti=0; nti<nameTargets.length; nti++){
-          var nt = nameTargets[nti];
-          var nIdx = nameSlotMap.get(d.newName);
-          if(nIdx===undefined){ nIdx = baseCount + extraSlots.length; nameSlotMap.set(d.newName, nIdx); extraSlots.push(d.newName); }
-          var nMax = Math.pow(256, nt.w) - 1, nWiden = false;
-          if(nIdx > nMax){
-            if(allowWiden) nWiden = true;
-            else { nameWarn.push('Entry "'+d.idx+'": node nama 1-byte gak muat slot baru, nama dibiarkan asli.'); continue; }
-          }
-          patches.push({byteOffset:nt.off, byteWidth:nt.w, newIndex:nIdx, widen:nWiden});
+    var isShapeDEntry = !!(store.nlLit || (store.logs && store.logs.length));
+    if(!isShapeDEntry && store.nameIdx!=null && store.nameIdx>=0 && store.nameIdx<baseCount &&
+      d.newName && d.newName.trim() && d.newName.toLowerCase()!=='narasi' &&
+      d.newName !== psbStr(psb, store.nameIdx)){
+      // Update speaker name slot in-place in string table (or split only if index fits within existing byteWidth without rewriting PSB entry tree)
+      if(!slotOwner.has(store.nameIdx)){
+        newVals[store.nameIdx] = d.newName;
+        slotOwner.set(store.nameIdx, {text: d.newName, ownerIdx: d.idx});
+        nameSplit++;
+      } else if(slotOwner.get(store.nameIdx).text !== d.newName && store.nameIdxOffset!=null && store.nameIdxWidth!=null){
+        var nIdx = nameSlotMap.get(d.newName);
+        var nMax = Math.pow(256, store.nameIdxWidth) - 1;
+        var nextCand = nIdx !== undefined ? nIdx : (baseCount + extraSlots.length);
+        if(nextCand <= nMax){
+          if(nIdx === undefined){ nIdx = nextCand; nameSlotMap.set(d.newName, nIdx); extraSlots.push(d.newName); }
+          patches.push({byteOffset:store.nameIdxOffset, byteWidth:store.nameIdxWidth, newIndex:nIdx, widen:false});
           nameSplit++;
         }
-      } else if(d.newName !== psbStr(psb, store.nameIdx)) {
-        newVals[store.nameIdx] = d.newName;
-        legacyName++;
       }
     }
   }
