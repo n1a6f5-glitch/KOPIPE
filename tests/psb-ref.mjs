@@ -313,3 +313,24 @@ function roundTrip(label, raw, wrap) {
   assert.ok(cleanLines[0].length <= 40, 'line 1 must be <= 40 chars so engine never breaks mid-word at char 41: ' + cleanLines[0]);
   console.log('ok SCN large-font (%140;) proportional wrapWidth:', cleanLines);
 }
+
+{
+  // 8. Literal ASCII % in translation (e.g. "gone up by 30%!") is converted to full-width ％ so M2 engine never swallows %!" as an unclosed %...; tag
+  const pctPsb = buildPsb(O([
+    ['scenes', C(O([
+      ['texts', C(
+        T('カイ', 'Kai', '「客足が３０％も増えたんだ」')
+      )]
+    ]))]
+  ]));
+  const exPct = extractFromScn(pctPsb, []);
+  const repPct = repackScn(pctPsb, exPct.tagStore, {
+    0: ['Kai', '"Ever since you started writing them, customer traffic has gone up by 30%!"']
+  }, 55, '\n', { verify: true });
+  assert.equal(repPct.verifyOk, true);
+  const outPsb = parsePsb(repPct.buf);
+  const s0 = [];
+  for (let i = 0; i < outPsb.strings.entryCount; i++) s0.push(psbStr(outPsb, i));
+  assert.ok(s0.some(x => x.includes('30％!"')), 'literal 30% converted to safe 30％!" in PSB');
+  console.log('ok SCN literal % -> ％ safety conversion');
+}

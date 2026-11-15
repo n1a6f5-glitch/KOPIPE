@@ -8,7 +8,7 @@ import { analyzeTagSafety, stripTagsForAi, fixTags, validate, glossaryRules, CRI
 import { matchVndb, buildGls } from './vndb.js';
 import { createLog, summarizeLog, formatLog } from './log.js';
 
-export const APP_VERSION = '1.2.3';
+export const APP_VERSION = '1.2.4';
 export const SCHEMA_VERSION = 2;
 export const STATUS = ['todo', 'draft', 'done', 'flag'];
 export const SCRIPT_EXTS = ['.ks', '.txt', '.ast', '.scn', '.json'];
