@@ -181,14 +181,25 @@ function psbResolve(psb, node){
 //   - selects[i].text (primary button text)
 //   - selectInfo.select[i].text (duplicate/mirror text node)
 //   - selectInfo.select[i].runLineStr (e.g. [seladd text="　喉が壊れても…" target="*01_01"])
-function scnCollectSelectInfoItems(psb, obj){
+function scnCollectSelectInfoItems(psb, obj, langIdx){
   var items = [];
   if(!obj) return items;
+  langIdx = (typeof langIdx === 'number' && langIdx >= 0) ? (langIdx | 0) : 0;
   var selInfoVal = psbObjValueByName(psb, obj, 'selectInfo');
   if(!selInfoVal) return items;
 
   function pushFromInfoObj(infObj){
     var tNode = psbObjValueByName(psb, infObj, 'text');
+    if(!tNode || tNode.kind !== 'string'){
+      var mlInf = psbObjValueByName(psb, infObj, 'texts') || psbObjValueByName(psb, infObj, 'language');
+      if(mlInf && mlInf.kind === 'collection' && psbCollectionSize(mlInf.col) > 0){
+        var mlPick = (langIdx < psbCollectionSize(mlInf.col)) ? langIdx : 0;
+        var mlv = psbColValue(psb, mlInf.col, mlPick);
+        if(mlv && mlv.kind === 'string') tNode = mlv;
+        else if(mlv && mlv.kind === 'objects') tNode = psbObjValueByName(psb, mlv.obj, 'text');
+        else if(mlv && mlv.kind === 'collection' && psbCollectionSize(mlv.col) > 1) tNode = psbColValue(psb, mlv.col, 1);
+      }
+    }
     var rNode = psbObjValueByName(psb, infObj, 'runLineStr');
     if((tNode && tNode.kind === 'string') || (rNode && rNode.kind === 'string')){
       items.push({
@@ -219,10 +230,11 @@ function scnCollectSelectInfoItems(psb, obj){
   return items;
 }
 
-function scnExtractSelectsFromObj(psb, obj, sceneIdx, fallbackInfoPool){
+function scnExtractSelectsFromObj(psb, obj, sceneIdx, fallbackInfoPool, langIdx){
   var out = [];
   if(!obj) return out;
-  var localInfo = scnCollectSelectInfoItems(psb, obj);
+  langIdx = (typeof langIdx === 'number' && langIdx >= 0) ? (langIdx | 0) : 0;
+  var localInfo = scnCollectSelectInfoItems(psb, obj, langIdx);
   var selectsVal = psbObjValueByName(psb, obj, 'selects');
 
   if(selectsVal && selectsVal.kind === 'collection'){
@@ -236,7 +248,8 @@ function scnExtractSelectsFromObj(psb, obj, sceneIdx, fallbackInfoPool){
         else {
           var ml = psbObjValueByName(psb, item.obj, 'texts') || psbObjValueByName(psb, item.obj, 'language');
           if(ml && ml.kind === 'collection' && psbCollectionSize(ml.col) > 0){
-            var ml0 = psbColValue(psb, ml.col, 0);
+            var mlPick = (langIdx < psbCollectionSize(ml.col)) ? langIdx : 0;
+            var ml0 = psbColValue(psb, ml.col, mlPick);
             if(ml0 && ml0.kind === 'string') mainTextNode = ml0;
             else if(ml0 && ml0.kind === 'objects'){
               var mlt = psbObjValueByName(psb, ml0.obj, 'text');
@@ -249,7 +262,7 @@ function scnExtractSelectsFromObj(psb, obj, sceneIdx, fallbackInfoPool){
         }
         var rn = psbObjValueByName(psb, item.obj, 'runLineStr');
         if(rn && rn.kind === 'string') itemRunNode = rn;
-        nestedInfo = scnCollectSelectInfoItems(psb, item.obj);
+        nestedInfo = scnCollectSelectInfoItems(psb, item.obj, langIdx);
       } else if(item && item.kind === 'string'){
         mainTextNode = item;
       } else if(item && item.kind === 'collection' && psbCollectionSize(item.col) > 0){
@@ -483,10 +496,11 @@ function scnStrategyB(psb){
 
 var SCN_JUNK = new Set(['envupdate','face','bg','ef0','ef1','ef2','bgm','se','voice','pretrans','lock','unlock','motion','pose','select','jump','call','chapter','trans']);
 
-function scnStrategyC(psb){
+function scnStrategyC(psb, opts){
   var entries = [];
+  var LANG = (opts && typeof opts.scnLang === 'number' && opts.scnLang >= 0) ? (opts.scnLang | 0) : 0;
   function processList(list){
-    var LANG=0, n=psbCollectionSize(list.col);
+    var n=psbCollectionSize(list.col);
     for(var i=0;i<n;i++){
       var val = psbColValue(psb, list.col, i);
       if(!val || val.kind!=='collection') continue;
@@ -497,8 +511,9 @@ function scnStrategyC(psb){
       if(!langList) continue;
       if(psize>0) name = scnGetStr(psb, psbColValue(psb,params,0));
       if(name && SCN_JUNK.has(name)) continue;
-      if(psbCollectionSize(langList) > LANG){
-        var lVal=psbColValue(psb,langList,LANG);
+      var cLangCnt = psbCollectionSize(langList);
+      if(cLangCnt > 0){
+        var lVal=psbColValue(psb,langList, LANG < cLangCnt ? LANG : 0);
         if(lVal && lVal.kind==='collection' && psbCollectionSize(lVal.col)>1){
           msgNode = psbColValue(psb,lVal.col,1);
           msg = scnGetStr(psb, msgNode);
@@ -725,14 +740,15 @@ function scnMaskNl(msg){
   var masked=msg.replace(re,function(x){tl.push(x);return'<T'+(++n)+'>';});
   return {masked:masked, tl:tl};
 }
-function scnStrategyD(psb){
+function scnStrategyD(psb, opts){
   var entries=[];
   if(!psb.root || psb.root.kind!=='objects') return entries;
   var scenesVal = psbObjValueByName(psb, psb.root.obj, 'scenes');
   if(!scenesVal || scenesVal.kind!=='collection') return entries;
-  var rootInfoPool = scnCollectSelectInfoItems(psb, psb.root.obj);
+  var reqLang = (opts && typeof opts.scnLang === 'number' && opts.scnLang >= 0) ? (opts.scnLang | 0) : 0;
+  var rootInfoPool = scnCollectSelectInfoItems(psb, psb.root.obj, reqLang);
   var sceneCount = psbCollectionSize(scenesVal.col);
-  var totalTextTuples = 0, dialogueCount = 0;
+  var totalTextTuples = 0, dialogueCount = 0, maxLangCount = 0;
   for(var si=0; si<sceneCount; si++){
     var scene = psbColValue(psb, scenesVal.col, si);
     if(!scene || scene.kind!=='objects') continue;
@@ -744,23 +760,38 @@ function scnStrategyD(psb){
         var tuple = psbColValue(psb, textsVal.col, ti);
         if(!tuple || tuple.kind!=='collection' || psbCollectionSize(tuple.col)<2) continue;
         var langs = psbColValue(psb, tuple.col, 1);
-        if(!langs || langs.kind!=='collection' || psbCollectionSize(langs.col)<1) continue;
-        var lang0 = psbColValue(psb, langs.col, 0);
-        if(!lang0 || lang0.kind!=='collection' || psbCollectionSize(lang0.col)<2) continue;
-        var msgNode = psbColValue(psb, lang0.col, 1);
+        if(!langs || langs.kind!=='collection') continue;
+        var lCount = psbCollectionSize(langs.col);
+        if(lCount < 1) continue;
+        if(lCount > maxLangCount) maxLangCount = lCount;
+        var pickIdx = (reqLang < lCount) ? reqLang : 0;
+        var langSlot = psbColValue(psb, langs.col, pickIdx);
+        if(!langSlot || langSlot.kind!=='collection' || psbCollectionSize(langSlot.col)<2) continue;
+        var msgNode = psbColValue(psb, langSlot.col, 1);
         if(!msgNode || msgNode.kind!=='string') continue;
         var msg = psbResolve(psb, msgNode);
         if(!msg || !msg.trim()) continue;
-        var nameNode = psbColValue(psb, tuple.col, 0);
-        var name = nameNode && nameNode.kind==='string' ? psbResolve(psb,nameNode) : '';
-        var logs=[], ln=psbCollectionSize(lang0.col);
+        var slotNameNode = psbColValue(psb, langSlot.col, 0);
+        var slotNameStr = (slotNameNode && slotNameNode.kind==='string') ? psbResolve(psb, slotNameNode) : '';
+        var baseNameNode = psbColValue(psb, tuple.col, 0);
+        var baseNameStr = (baseNameNode && baseNameNode.kind==='string') ? psbResolve(psb, baseNameNode) : '';
+        var name = '', patchNameNode = null;
+        if(slotNameStr && slotNameStr.trim()){
+          name = slotNameStr;
+          patchNameNode = slotNameNode;
+        } else if(baseNameStr && baseNameStr.trim()){
+          name = baseNameStr;
+          if(pickIdx === 0) patchNameNode = baseNameNode;
+        }
+        var logs=[], ln=psbCollectionSize(langSlot.col);
         for(var li=3; li<Math.min(ln,5); li++){
-          var lnode = psbColValue(psb, lang0.col, li);
+          var lnode = psbColValue(psb, langSlot.col, li);
           if(lnode && lnode.kind==='string') logs.push({idx:lnode.index, off:lnode.byteOffset, w:lnode.byteWidth});
         }
         entries.push({name:(name||'').trim(), message:msg,
-          nameIdx: (SCN_PATCH_NAMES_D && nameNode && nameNode.kind==='string') ? nameNode.index : null,
-          nameIdxOffset: nameNode && nameNode.kind==='string' ? nameNode.byteOffset : null, nameIdxWidth: nameNode && nameNode.kind==='string' ? nameNode.byteWidth : null,
+          nameIdx: (SCN_PATCH_NAMES_D && patchNameNode && patchNameNode.kind==='string') ? patchNameNode.index : null,
+          nameIdxOffset: (patchNameNode && patchNameNode.kind==='string') ? patchNameNode.byteOffset : null,
+          nameIdxWidth: (patchNameNode && patchNameNode.kind==='string') ? patchNameNode.byteWidth : null,
           msgIdx: msgNode.index, msgIdxOffset: msgNode.byteOffset, msgIdxWidth: msgNode.byteWidth,
           logs: logs, nlLit: '\\n', sceneIdx: si});
         dialogueCount++;
@@ -770,11 +801,11 @@ function scnStrategyD(psb){
   for(var si2=0; si2<sceneCount; si2++){
     var scene2 = psbColValue(psb, scenesVal.col, si2);
     if(!scene2 || scene2.kind!=='objects') continue;
-    var sceneSelects = scnExtractSelectsFromObj(psb, scene2.obj, si2, rootInfoPool);
+    var sceneSelects = scnExtractSelectsFromObj(psb, scene2.obj, si2, rootInfoPool, reqLang);
     for(var sci=0; sci<sceneSelects.length; sci++) entries.push(sceneSelects[sci]);
   }
   if(totalTextTuples > 0 && dialogueCount === 0) return [];
-  var rootSelects = scnExtractSelectsFromObj(psb, psb.root.obj, undefined, null);
+  var rootSelects = scnExtractSelectsFromObj(psb, psb.root.obj, undefined, null, reqLang);
   for(var rsi=0; rsi<rootSelects.length; rsi++){
     var rs = rootSelects[rsi];
     var dup = entries.some(function(x){
@@ -783,6 +814,8 @@ function scnStrategyD(psb){
     });
     if(!dup) entries.push(rs);
   }
+  entries._langCount = maxLangCount || 1;
+  entries._langIdx = (maxLangCount > 0 && reqLang < maxLangCount) ? reqLang : 0;
   return entries;
 }
 
@@ -932,7 +965,7 @@ function extractFromScn(buf, sg, opts){
     var rawEntries0 = [], usedStrategy0 = null;
     for(var i0=0; i0<SCN_STRATEGIES.length; i0++){
       var s0 = SCN_STRATEGIES[i0];
-      try{ rawEntries0 = s0.fn(psb0); }catch(err){ rawEntries0 = []; }
+      try{ rawEntries0 = s0.fn(psb0, opts); }catch(err){ rawEntries0 = []; }
       if(rawEntries0.length){ usedStrategy0 = s0; break; }
     }
     return finishScnExtract(rawEntries0, usedStrategy0, xor0, sg, null, null, null);
@@ -1000,7 +1033,7 @@ function extractFromScn(buf, sg, opts){
   var rawEntries = [], usedStrategy = null;
   for(var i=0; i<strats.length; i++){
     var s = strats[i], ts0 = nowMs(), threw = null;
-    try{ rawEntries = s.fn(psb) || []; }catch(err){ rawEntries = []; threw = err; }
+    try{ rawEntries = s.fn(psb, opts) || []; }catch(err){ rawEntries = []; threw = err; }
     var dMs = +(nowMs() - ts0).toFixed(2);
     if(log){
       if(threw){
@@ -1179,7 +1212,12 @@ function finishScnExtract(rawEntries, usedStrategy, xor, sg, log, psb, timing){
     });
   }
 
-  return {lines:lines, tagStore:tagStore, entryCount:rawEntries.length, strategy: usedStrategy ? usedStrategy.id : null, xor:xor};
+  var langCount = (rawEntries && rawEntries._langCount) ? rawEntries._langCount : 1;
+  var langIdx = (rawEntries && typeof rawEntries._langIdx === 'number') ? rawEntries._langIdx : 0;
+  if(log && langCount > 1){
+    log.info('strategy', 'Multi-bahasa terdeteksi (' + langCount + ' slot bahasa); mengekstrak slot #' + langIdx, { langCount: langCount, langIdx: langIdx });
+  }
+  return {lines:lines, tagStore:tagStore, entryCount:rawEntries.length, strategy: usedStrategy ? usedStrategy.id : null, xor:xor, langCount: langCount, langIdx: langIdx};
 }
 
 // — SCN REPACK ————————————————————————————————————————————————
@@ -1474,7 +1512,7 @@ function repackScn(origBuf, tagStore, translations, wrapWidth, nlStr, opts){
   }
   // Self-verification: when logger is active or opts.verify is requested, re-parse the repacked buffer and compare entry count & masked structure
   if(log || (opts && opts.verify)){
-    var vRes = verifyRepackedScn(origBuf, res.buf, tagStore, translations, wrapWidth, log);
+    var vRes = verifyRepackedScn(origBuf, res.buf, tagStore, translations, wrapWidth, log, opts);
     res.verifyOk = vRes.ok;
     res.verifyErrors = vRes.errors;
     if(!vRes.ok){
@@ -1486,12 +1524,13 @@ function repackScn(origBuf, tagStore, translations, wrapWidth, nlStr, opts){
   return res;
 }
 
-function verifyRepackedScn(origBuf, outBuf, tagStore, translations, wrapWidth, log){
+function verifyRepackedScn(origBuf, outBuf, tagStore, translations, wrapWidth, log, opts){
   var errors = [];
   var expectedCount = Object.keys(tagStore || {}).length;
   var reEx;
   try {
-    reEx = extractFromScn(outBuf, []);
+    var reOpts = (opts && typeof opts.scnLang === 'number') ? { scnLang: opts.scnLang } : undefined;
+    reEx = extractFromScn(outBuf, [], reOpts);
   } catch (err) {
     errors.push('Gagal mengurai ulang hasil repack: ' + err.message);
     if(log) log.error('verify', 'Hasil repack gagal diverifikasi — jangan dipakai: gagal mengurai ulang (' + err.message + ')', { verify: 'mismatch', error: err.message });
@@ -1694,10 +1733,18 @@ function repackScnImpl(origBuf, tagStore, translations, wrapWidth, nlStr, allowW
               }
             }
           } else if(n1Node && n1Node.kind === 'collection' && psbCollectionSize(n1Node.col) >= 1){
-            var l0 = psbColValue(psb, n1Node.col, 0);
-            if(l0 && l0.kind === 'collection' && psbCollectionSize(l0.col) >= 2){
-              var mNodeD = psbColValue(psb, l0.col, 1);
-              if(mNodeD && mNodeD.kind === 'string' && n0Node && n0Node.kind === 'string'){
+            var lCntD = psbCollectionSize(n1Node.col);
+            for(var liD=0; liD<lCntD; liD++){
+              var lSlotD = psbColValue(psb, n1Node.col, liD);
+              if(!lSlotD || lSlotD.kind !== 'collection' || psbCollectionSize(lSlotD.col) < 2) continue;
+              var mNodeD = psbColValue(psb, lSlotD.col, 1);
+              if(!mNodeD || mNodeD.kind !== 'string') continue;
+              var lNameD = psbColValue(psb, lSlotD.col, 0);
+              var lNameStr = (lNameD && lNameD.kind === 'string') ? psbResolve(psb, lNameD) : '';
+              if(lNameStr && lNameStr.trim()){
+                nameNodeByMsgOff.set(mNodeD.byteOffset, { idx: lNameD.index, off: lNameD.byteOffset, w: lNameD.byteWidth });
+                addSpkNode(lNameD);
+              } else if(liD === 0 && n0Node && n0Node.kind === 'string'){
                 var nDStr = psbResolve(psb, n0Node);
                 if(nDStr && nDStr.trim()){
                   nameNodeByMsgOff.set(mNodeD.byteOffset, { idx: n0Node.index, off: n0Node.byteOffset, w: n0Node.byteWidth });

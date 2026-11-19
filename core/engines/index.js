@@ -71,10 +71,11 @@ export async function importScript(name, bytes, opts = {}) {
   const log = opts.log ? normLogger(opts.log) : null;
   const low = name.toLowerCase();
   if (low.endsWith('.scn')) {
+    const scnLang = (typeof opts.scnLang === 'number' && opts.scnLang >= 0) ? (opts.scnLang | 0) : 0;
     if (!log) {
       const u = await scnMdfUnwrap(bytes);
-      const ex = extractFromScn(u.buf, sg);
-      return { kind: 'scn', meta: { mdf: u.mdf, strategy: ex.strategy || null, txtHint: opts.txtHint, vntpFilter: !!opts.vntpFilter }, lines: ex.lines, tagStore: ex.tagStore, entryCount: ex.entryCount };
+      const ex = extractFromScn(u.buf, sg, scnLang ? { scnLang } : undefined);
+      return { kind: 'scn', meta: { mdf: u.mdf, strategy: ex.strategy || null, scnLang: ex.langIdx ?? 0, scnLangCount: ex.langCount ?? 1, txtHint: opts.txtHint, vntpFilter: !!opts.vntpFilter }, lines: ex.lines, tagStore: ex.tagStore, entryCount: ex.entryCount };
     }
     const hash = 'fnv1a:' + fnv1aHex(bytes);
     if (opts.log && opts.log.meta) Object.assign(opts.log.meta, { name, size: bytes.length, hash, kind: 'scn' });
@@ -82,9 +83,9 @@ export async function importScript(name, bytes, opts = {}) {
     const t0 = nowMs();
     const u = await scnMdfUnwrap(bytes, { log });
     const unwrapMs = +(nowMs() - t0).toFixed(2);
-    const ex = extractFromScn(u.buf, sg, { log, _fileLogged: true, name, unwrapMs });
-    if (opts.log && opts.log.meta) Object.assign(opts.log.meta, { strategy: ex.strategy || null, entryCount: ex.entryCount });
-    return { kind: 'scn', meta: { mdf: u.mdf, strategy: ex.strategy || null, hash, txtHint: opts.txtHint, vntpFilter: !!opts.vntpFilter }, lines: ex.lines, tagStore: ex.tagStore, entryCount: ex.entryCount };
+    const ex = extractFromScn(u.buf, sg, { log, _fileLogged: true, name, unwrapMs, scnLang });
+    if (opts.log && opts.log.meta) Object.assign(opts.log.meta, { strategy: ex.strategy || null, entryCount: ex.entryCount, scnLang: ex.langIdx ?? 0, scnLangCount: ex.langCount ?? 1 });
+    return { kind: 'scn', meta: { mdf: u.mdf, strategy: ex.strategy || null, scnLang: ex.langIdx ?? 0, scnLangCount: ex.langCount ?? 1, hash, txtHint: opts.txtHint, vntpFilter: !!opts.vntpFilter }, lines: ex.lines, tagStore: ex.tagStore, entryCount: ex.entryCount };
   }
   if (low.endsWith('.json')) {
     let data;
@@ -140,14 +141,15 @@ export async function exportScript(rec, translations, opts = {}) {
   const nl = resolveWrapSep(k, meta, opts);
   const log = opts.log ? normLogger(opts.log) : null;
   if (k === 'scn') {
+    const scnLang = (typeof meta.scnLang === 'number') ? meta.scnLang : ((typeof opts.scnLang === 'number') ? opts.scnLang : 0);
     if (!log && !opts.verify && !opts.onRepackMeta && !opts._corruptOutput) {
       const u = await scnMdfUnwrap(bytes);
-      const r = repackScn(u.buf, rec.tagStore, translations, ww, nl);
+      const r = repackScn(u.buf, rec.tagStore, translations, ww, nl, scnLang ? { scnLang } : undefined);
       return u.mdf ? scnMdfWrap(r.buf) : r.buf;
     }
     if (opts.log && opts.log.meta) Object.assign(opts.log.meta, { name: rec.path || rec.name || 'script.scn', size: bytes.length, kind: 'scn' });
     const u = await scnMdfUnwrap(bytes, { log });
-    const r = repackScn(u.buf, rec.tagStore, translations, ww, nl, { log, verify: opts.verify, _corruptOutput: opts._corruptOutput });
+    const r = repackScn(u.buf, rec.tagStore, translations, ww, nl, { log, verify: opts.verify, _corruptOutput: opts._corruptOutput, scnLang });
     const out = u.mdf ? await scnMdfWrap(r.buf, { log }) : r.buf;
     if (typeof opts.onRepackMeta === 'function') opts.onRepackMeta(r);
     return out;

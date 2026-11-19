@@ -335,3 +335,97 @@ function roundTrip(label, raw, wrap) {
   assert.ok(s0.some(x => x.includes('%CSeven.')), 'M2 command %CSeven. preserved as ASCII %C');
   console.log('ok SCN digit% -> ％ while preserving %C command codes');
 }
+
+{
+  // 9. shape-d speaker name patching works both directly and when tagStore[idx].nameIdx was null (recovered via nameNodeByMsgOff), while preserving shared non-speaker strings
+  const shapeDNamePsb = buildPsb(O([
+    ["charDefs", C(O([["id", S("カイ")], ["stand", S("st_kai_01")]]))],
+    ["scenes", C(O([
+      ["texts", C(
+        C(S("カイ"), C(C(I(1), S("「客足が３０％も増えたんだ」"), NUL, S("「客足が３０％も増えたんだ」")))),
+        C(S("風俗嬢"), C(C(I(2), S("「いらっしゃいませ」"), NUL, S("「いらっしゃいませ」"))))
+      )]
+    ]))]
+  ]));
+  const exDName = extractFromScn(shapeDNamePsb, [["カイ", "Kai"], ["風俗嬢", "Sex Worker"]]);
+  assert.equal(exDName.strategy, "shape-d");
+  assert.equal(exDName.entryCount, 2);
+  // Simulate legacy/v1.2.6 tagStore where nameIdx was null
+  exDName.tagStore[0].nameIdx = null;
+  exDName.tagStore[1].nameIdx = null;
+
+  const repDName = repackScn(shapeDNamePsb, exDName.tagStore, {
+    0: ["Kai", "\"Ever since you started writing them, customer traffic has gone up by 30%!\""],
+    1: ["Sex Worker", "\"Welcome!\""]
+  }, 55, "\\n", { verify: true });
+  assert.equal(repDName.verifyOk, true);
+
+  const reExD = extractFromScn(repDName.buf, []);
+  assert.match(reExD.lines[0], /^\[0\|Kai\] /, "shape-d speaker 0 patched to Kai even when nameIdx was null");
+  assert.match(reExD.lines[1], /^\[1\|Sex Worker\] /, "shape-d speaker 1 patched to Sex Worker");
+
+  const parsedD = parsePsb(repDName.buf);
+  const treeLines = [];
+  fmt(parsedD, parsedD.root, "ROOT", 0, treeLines);
+  const treeStr = treeLines.join("\n");
+  assert.ok(treeStr.includes('id = STR #') && treeStr.includes('"カイ"'), "shared non-speaker charDefs.id preserved as カイ");
+  console.log("ok SCN shape-d speaker patching + null-nameIdx recovery + shared non-speaker safety");
+}
+
+
+// Multi-language shape-d (.ks.scn): Slot 0 (JP) + Slot 1 (EN) isolation, per-slot speaker patching, and fallback
+{
+  const mlPsb = buildPsb(O([['scenes', C(
+    O([['title', S('prologue')], ['texts', C(
+      C(NUL, C(
+        C(NUL, S('%n;そこは熱気に満たされていた。'), I(14), S('そこは熱気に満たされていた。'), S('そこは熱気に満たされていた。')),
+        C(NUL, S('%n;The air in there is thick with heat.'), I(36), S('The air in there is thick with heat.'), S('The air in there is thick with heat.'))
+      )),
+      C(S('雪鷹'), C(
+        C(NUL, S('「……ん……ん？」'), I(9)),
+        C(S('Yukitaka'), S('...Mmh... Hm?'), I(13))
+      )),
+      C(S('莉々子の母'), C(
+        C(S('声'), S('「はーい」'), I(5)),
+        C(S('Voice'), S('Comiiing!'), I(9))
+      ))
+    )]])
+  )]]));
+
+  const ex0 = extractFromScn(mlPsb, [], { scnLang: 0 });
+  assert.equal(ex0.langCount, 2);
+  assert.equal(ex0.langIdx, 0);
+  assert.equal(ex0.lines[1], '[1|雪鷹] 「……ん……ん？」');
+  assert.equal(ex0.lines[2], '[2|声] 「はーい」');
+
+  const ex1 = extractFromScn(mlPsb, [], { scnLang: 1 });
+  assert.equal(ex1.langCount, 2);
+  assert.equal(ex1.langIdx, 1);
+  assert.equal(ex1.lines[0], '[0|Narasi] <T1>The air in there is thick with heat.');
+  assert.equal(ex1.lines[1], '[1|Yukitaka] ...Mmh... Hm?');
+  assert.equal(ex1.lines[2], '[2|Voice] Comiiing!');
+
+  const rep1 = repackScn(mlPsb, ex1.tagStore, {
+    0: ['Narasi', '<T1>Udara di sana terasa panas.'],
+    1: ['Yukitaka-ID', '...Mmh... Hm?'],
+    2: ['Suara', 'Sebentaaar!']
+  }, 0, '\n', { verify: true, scnLang: 1 });
+  assert.equal(rep1.verifyOk, true);
+
+  const re1 = extractFromScn(rep1.buf, [], { scnLang: 1 });
+  assert.equal(re1.lines[0], '[0|Narasi] <T1>Udara di sana terasa panas.');
+  assert.equal(re1.lines[1], '[1|Yukitaka-ID] ...Mmh... Hm?');
+  assert.equal(re1.lines[2], '[2|Suara] Sebentaaar!');
+
+  // Slot 0 JP & internal speaker ID must stay untouched
+  const re0 = extractFromScn(rep1.buf, [], { scnLang: 0 });
+  assert.equal(re0.lines[0], '[0|Narasi] <T1>そこは熱気に満たされていた。');
+  assert.equal(re0.lines[1], '[1|雪鷹] 「……ん……ん？」');
+  assert.equal(re0.lines[2], '[2|声] 「はーい」');
+
+  // Out-of-bounds scnLang safely falls back to slot 0
+  const exFb = extractFromScn(mlPsb, [], { scnLang: 3 });
+  assert.equal(exFb.langIdx, 0);
+  assert.equal(exFb.entryCount, 3);
+  console.log('ok SCN multi-language shape-d (slot 0/1 isolation, per-slot speaker patch, fallback)');
+}

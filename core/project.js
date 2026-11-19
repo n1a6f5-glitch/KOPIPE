@@ -807,6 +807,7 @@ export async function importFolderBatch(store, pid, rawItems, opts = {}) {
   const {
     txtHint = 'auto',
     vntpFilter = false,
+    scnLang = 0,
     onDuplicate = 'update',
     dryRun = false,
     onProgress,
@@ -876,7 +877,7 @@ export async function importFolderBatch(store, pid, rawItems, opts = {}) {
     const log = createLog({ cap: 500, meta: { name: item.name, path: item.path, size: bytes.length } });
     try {
       if (dryRun) {
-        const ex = await importScript(item.name, bytes, { sg, txtHint, vntpFilter, log });
+        const ex = await importScript(item.name, bytes, { sg, txtHint, vntpFilter, scnLang, log });
         if (ex.kind === 'scn' && ex.entryCount === 0 && summarizeLog(log) === 'ok') {
           log.warn('entries', 'Berkas .scn menghasilkan 0 entri teks');
         }
@@ -890,7 +891,7 @@ export async function importFolderBatch(store, pid, rawItems, opts = {}) {
         summary.totalEntries += ex.entryCount;
         summary.results.push({ path: item.path, name: item.name, kind: ex.kind, status: st === 'ok' && ex.entryCount === 0 ? 'warn' : st, entryCount: ex.entryCount, log: logJson });
       } else if (existing && onDuplicate === 'update') {
-        const r = await updateFileSource(store, existing.id, bytes, { txtHint, vntpFilter, log });
+        const r = await updateFileSource(store, existing.id, bytes, { txtHint, vntpFilter, scnLang, log });
         const st = r.file.logStatus || summarizeLog(r.log);
         if (r.count === 0) summary.zeroEntryFiles.push(item.path);
         if (st === 'error') summary.errorCount++;
@@ -900,7 +901,7 @@ export async function importFolderBatch(store, pid, rawItems, opts = {}) {
         summary.totalEntries += r.count;
         summary.results.push({ id: r.file.id, path: item.path, name: item.name, kind: r.file.kind, status: st === 'ok' && r.count === 0 ? 'warn' : st, entryCount: r.count, kept: r.kept, log: r.log });
       } else {
-        const r = await addFile(store, pid, item.name, bytes, { path: item.path, txtHint, vntpFilter, log });
+        const r = await addFile(store, pid, item.name, bytes, { path: item.path, txtHint, vntpFilter, scnLang, log });
         existingByPath.set(item.path, r.file);
         const st = r.file.logStatus || summarizeLog(r.log);
         if (r.count === 0) summary.zeroEntryFiles.push(item.path);
@@ -1266,7 +1267,7 @@ export async function renameSpeakerGlobally(store, pid, rawName, translatedName)
 }
 
 // Re-parse all stored files in IndexedDB using the updated parser while keeping all existing translations
-export async function reparseStoredFiles(store, pid, { onProgress } = {}) {
+export async function reparseStoredFiles(store, pid, { onProgress, scnLang } = {}) {
   const files = await listFiles(store, pid);
   let updatedFiles = 0, addedLines = 0, keptLines = 0;
   for (let i = 0; i < files.length; i++) {
@@ -1277,7 +1278,8 @@ export async function reparseStoredFiles(store, pid, { onProgress } = {}) {
     if (!blob || !blob.bytes || !blob.bytes.length) continue;
     const oldCount = f.entryCount || 0;
     const hint = f.kind === "artemis-txt" ? "artemis" : f.kind === "txt" ? "kirikiri" : "auto";
-    const r = await updateFileSource(store, f.id, blob.bytes, { txtHint: hint, vntpFilter: !!(f.meta && f.meta.vntpFilter) });
+    const effScnLang = (typeof scnLang === 'number') ? scnLang : ((f.meta && typeof f.meta.scnLang === 'number') ? f.meta.scnLang : 0);
+    const r = await updateFileSource(store, f.id, blob.bytes, { txtHint: hint, vntpFilter: !!(f.meta && f.meta.vntpFilter), scnLang: effScnLang });
     updatedFiles++;
     addedLines += Math.max(0, r.count - oldCount);
     keptLines += r.kept || 0;

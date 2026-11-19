@@ -65,7 +65,7 @@ const S = {
   batchFrom: null, batchStatus: 'todo',
   qcPage: 1, qcFilter: 'all', qcTargetMode: 'polish', qcFrom: 1,
   qcRev: 1, qcCache: null,
-  fileFilter: '', vntpFilter: false, onlyTranslatedZip: false,
+  fileFilter: '', vntpFilter: false, scnLang: 0, onlyTranslatedZip: false,
   showVnPreview: lsGet('kopipe.preview') === '1',
   theme: lsGet('kopipe.theme') || 'obsidian',
   collapsedDirs: new Set(), _dirsInit: false, lastSummary: null
@@ -1254,12 +1254,22 @@ async function exportFilesAsZip(targetFiles, zipName, progHolder) {
 
 async function renderFiles(v) {
   const flt = h('input', { type: 'checkbox', checked: S.vntpFilter, onchange: () => { S.vntpFilter = flt.checked; } });
+  const scnLangSel = h('select', {
+    style: 'padding:4px 8px;font-size:12px',
+    title: 'Target language slot for multi-language Kirikiri .scn files (falls back to Slot 0 on single-language files)',
+    onchange: () => { S.scnLang = parseInt(scnLangSel.value, 10) || 0; }
+  },
+    h('option', { value: '0', selected: S.scnLang === 0 }, 'SCN Lang: Slot 0 (JP / Default)'),
+    h('option', { value: '1', selected: S.scnLang === 1 }, 'SCN Lang: Slot 1 (EN / Lang 2)'),
+    h('option', { value: '2', selected: S.scnLang === 2 }, 'SCN Lang: Slot 2 (CN / Lang 3)'),
+    h('option', { value: '3', selected: S.scnLang === 3 }, 'SCN Lang: Slot 3 (Lang 4)')
+  );
   const progHolder = h('div');
 
   const input = h('input', { type: 'file', multiple: true, hidden: true, onchange: () => {
     const list = [...input.files]; input.value = '';
     if (!list.length) return;
-    addSingleOrMultiFiles(list, { txtHint: 'auto', vntpFilter: flt.checked });
+    addSingleOrMultiFiles(list, { txtHint: 'auto', vntpFilter: flt.checked, scnLang: S.scnLang });
   } });
 
   const dirInput = h('input', { type: 'file', webkitdirectory: true, multiple: true, hidden: true, onchange: () => {
@@ -1270,7 +1280,7 @@ async function renderFiles(v) {
     }));
     dirInput.value = '';
     if (!list.length) return;
-    runFolderBatchUI(list, { vntpFilter: flt.checked, dryRun: false }, progHolder);
+    runFolderBatchUI(list, { vntpFilter: flt.checked, scnLang: S.scnLang, dryRun: false }, progHolder);
   } });
 
   const dryDirInput = h('input', { type: 'file', webkitdirectory: true, multiple: true, hidden: true, onchange: () => {
@@ -1281,7 +1291,7 @@ async function renderFiles(v) {
     }));
     dryDirInput.value = '';
     if (!list.length) return;
-    runFolderBatchUI(list, { vntpFilter: flt.checked, dryRun: true }, progHolder);
+    runFolderBatchUI(list, { vntpFilter: flt.checked, scnLang: S.scnLang, dryRun: true }, progHolder);
   } });
 
   const drop = h('label', { class: 'drop' }, input,
@@ -1294,9 +1304,9 @@ async function renderFiles(v) {
     const { items, isFolder } = await collectDroppedItems(e.dataTransfer);
     if (!items.length) return;
     if (isFolder || items.length > 3) {
-      await runFolderBatchUI(items, { vntpFilter: flt.checked, dryRun: false }, progHolder);
+      await runFolderBatchUI(items, { vntpFilter: flt.checked, scnLang: S.scnLang, dryRun: false }, progHolder);
     } else {
-      await addSingleOrMultiFiles(items, { txtHint: 'auto', vntpFilter: flt.checked });
+      await addSingleOrMultiFiles(items, { txtHint: 'auto', vntpFilter: flt.checked, scnLang: S.scnLang });
     }
   });
 
@@ -1327,6 +1337,7 @@ async function renderFiles(v) {
       h('button', { class: 'pri', onclick: () => dirInput.click() }, 'Select Folder'),
       h('button', { onclick: () => input.click() }, 'Add Files'),
       h('button', { onclick: () => dryDirInput.click(), title: 'Test all files in a folder and view logs without saving' }, 'Dry-Run Folder'),
+      scnLangSel,
       h('label', { class: 'pill-chk', style: 'margin-left:auto', title: 'For VNTP .json files: skip repeated chapter/bookmark labels (3+ occurrences)' }, flt, 'Filter repeated bookmarks (VNTP .json)'),
       fmtBtn,
       dirInput, dryDirInput
@@ -1419,7 +1430,7 @@ async function renderFiles(v) {
             h('span', { class: 'dot ' + dotStatus, title: `Log status: ${dotStatus.toUpperCase()}` }),
             h('b', {}, f.name),
             f.path && f.path !== f.name ? h('span', { class: 'dim', style: 'margin-left:6px' }, f.path) : null,
-            h('div', { class: 'dim' }, `${KIND_LABEL[f.kind] || f.kind} · ${tr}/${f.entryCount} translated` + (f.meta && f.meta.strategy ? ` · ${f.meta.strategy}` : ''))
+            h('div', { class: 'dim' }, `${KIND_LABEL[f.kind] || f.kind} · ${tr}/${f.entryCount} translated` + (f.meta && f.meta.strategy ? ` · ${f.meta.strategy}` : '') + (f.meta && f.meta.scnLangCount > 1 ? ` · Lang ${f.meta.scnLang}/${f.meta.scnLangCount}` : ''))
           ),
           h('td', { style: 'text-align:right;white-space:nowrap' },
             h('button', { class: 'sm', onclick: async () => {
@@ -1489,6 +1500,7 @@ async function renderFiles(v) {
             progHolder.replaceChildren(h('div', { class: 'prog-box' }, lbl, h('div', { class: 'prog-bar' }, bar)));
             try {
               const r = await P.reparseStoredFiles(store, proj.id, {
+                scnLang: S.scnLang,
                 onProgress: p => {
                   lbl.textContent = `Re-parsing (${p.index}/${p.total}): ${p.name}`;
                   bar.style.width = `${Math.round((p.index / p.total) * 100)}%`;
