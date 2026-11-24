@@ -98,4 +98,51 @@ t('ast: command attr with number / string values survive', () => {
   assert.ok(/vo",\s*file="a\.ogg",\s*vol=1\.5|"vo",file="a\.ogg",vol=1\.5/.test(out), out);
 });
 
+
+t('ast: phonechat name-only sticker blocks never leak into next dialogue & translate cleanly via speaker map', () => {
+  const pc = `astver = 2.0
+ast = {
+  text = {
+    [227]={ja={{"そう思った時、スマホがLETTERの着信音を奏でた。"}}},
+    [228]={lane=1, name={name="スヴェ"}},
+    [229]={lane=2, name={name="スヴェ"}, ja={{"「ごめん間違えた」"}}},
+    [230]={lane=3, name={name="スヴェ"}},
+    [231]={lane=4, name={name="美玖"}},
+    [232]={lane=5, name={name="香子"}},
+    [233]={lane=6, name={name="広中"}},
+    [234]={lane=7, name={name="宗冬"}},
+    [235]={lane=8, name={name="スヴェ"}, ja={{"「皆起きてるね、偉い偉い」"}}},
+    [236]={lane=9, name={name="広中"}, ja={{"「すっげー上から目線だな」"}}},
+    [241]={lane=14, name={name="美玖"}, ja={{"「ごめん、素で間違えた」"}}},
+    [249]={lane=22, name={name="香子"}, ja={{"「じゃあ、私も行きますね」"}}},
+    [253]={lane=26, name={name="スヴェ"}},
+    [254]={name={name="宗冬"}, ja={{"「流れで行くって言ったけど……」"}}},
+  },
+}`;
+  const ex = A.extractFromAst(pc, []);
+  assert.equal(ex.entryCount, 7);
+  // Zero " / " leakage!
+  assert.equal(ex.lines[1], '[1|スヴェ] 「ごめん間違えた」');
+  assert.equal(ex.lines[2], '[2|スヴェ] 「皆起きてるね、偉い偉い」');
+  assert.equal(ex.lines[6], '[6|宗冬] 「流れで行くって言ったけど……」');
+  const tr = {
+    0: ['Narasi', 'Saat memikirkan itu, ponselku berbunyi.'],
+    1: ['Svetlana', '「Maaf, salah kirim」'],
+    2: ['Svetlana', '「Semuanya sudah bangun」'],
+    3: ['Hironaka', '「Nadanya merendahkan banget」'],
+    4: ['Miku', '「Maaf, beneran salah」'],
+    5: ['Kako', '「Kalau begitu saya juga datang」'],
+    6: ['Munefuyu', '「Tadi aku kebawa suasana bilang ikut……」'],
+  };
+  const out = A.repackAst(pc, ex.tagStore, tr, 0, '\r\n');
+  assert.ok(!out.includes(' / '), 'Repacked AST must not contain merged " / " names: ' + out);
+  assert.ok(out.includes('[228]={\n      lane=1,\n      name={name="Svetlana"}') || /\[228\]=\{[\s\S]*?name="Svetlana"/.test(out));
+  assert.ok(/\[231\]=\{[\s\S]*?name="Miku"/.test(out));
+  assert.ok(/\[232\]=\{[\s\S]*?name="Kako"/.test(out));
+  assert.ok(/\[233\]=\{[\s\S]*?name="Hironaka"/.test(out));
+  assert.ok(/\[234\]=\{[\s\S]*?name="Munefuyu"/.test(out));
+  assert.ok(/\[253\]=\{[\s\S]*?name="Svetlana"/.test(out));
+  assert.ok(/\[254\]=\{[\s\S]*?name="Munefuyu"/.test(out));
+});
+
 console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

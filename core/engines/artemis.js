@@ -352,20 +352,28 @@ function getAstStringNodes(roots){
 function extractJaBlockEntries(block,out){
   var jaT=tableGet(block,'ja');
   if(!jaT||jaT.k!=='table') return false;
+  var msgs=[];
+  for(var j=0;j<jaT.items.length;j++){
+    var jItem=jaT.items[j];
+    if(jItem.k==='table') msgs.push(jItem);
+  }
+  var nameNode=null;
   var nameCmd=tableGet(jaT,'name');
   if(nameCmd){
     if(nameCmd.k==='table'){
       var nameVal=tableGet(nameCmd,'name');
-      if(nameVal&&nameVal.k==='str') out.push({node:nameVal,type:'name'});
+      if(nameVal&&nameVal.k==='str') nameNode=nameVal;
     } else if(nameCmd.k==='str'){
-      out.push({node:nameCmd,type:'name'});
+      nameNode=nameCmd;
     }
   }
-  for(var j=0;j<jaT.items.length;j++){
-    var jItem=jaT.items[j];
-    if(jItem.k==='table') out.push({node:jItem,type:'message'});
+  if(msgs.length){
+    if(nameNode) out.push({node:nameNode,type:'name'});
+    for(var mi=0;mi<msgs.length;mi++) out.push({node:msgs[mi],type:'message'});
+  } else if(nameNode){
+    out.push({node:nameNode,type:'orphanName'});
   }
-  return true;
+  return msgs.length > 0;
 }
 function getAstStringNodesV1(ast){
   var out=[]; var texts=tableGet(ast,'text');
@@ -383,18 +391,26 @@ function getAstStringNodesV1(ast){
     // IS the display text, so fall back to it when "ja" isn't present.
     var nameJa=tableGet(nameTable,'ja');
     var name=nameTable&&nameTable.k==='table'?(nameJa&&nameJa.k==='str'?nameJa:tableGet(nameTable,'name')):undefined;
-    if(name&&name.k==='str') out.push({node:name,type:'name'});
+    var blockOut=[], hasMsg=false;
     var select=tableGet(text,'select');
-    if(select&&select.k==='table') for(var si=0;si<select.items.length;si++) if(select.items[si].k==='str') out.push({node:select.items[si],type:'message'});
-    // The message itself can be nested under a "ja" field (see extractJaBlockEntries
-    // above – this is the same shape as ast[N].ja seen elsewhere, just one level
-    // deeper at ast.text[N].ja; a naive "jaT.items.length===1" check used to miss
-    // every block that ALSO carried a speaker name here, since that adds a second
-    // item to ja.items and silently dropped the whole line, not just the name), or
-    // as a bare positional table entry sitting directly among text[i]'s own items.
-    if(!extractJaBlockEntries(text,out)){
+    if(select&&select.k==='table'){
+      for(var si=0;si<select.items.length;si++){
+        if(select.items[si].k==='str'){ blockOut.push({node:select.items[si],type:'message'}); hasMsg=true; }
+      }
+    }
+    if(extractJaBlockEntries(text,blockOut)){
+      hasMsg=true;
+    } else {
       var message=text.items.find(function(n){return n.k==='table'});
-      if(message) out.push({node:message,type:'message'});
+      if(message){ blockOut.push({node:message,type:'message'}); hasMsg=true; }
+    }
+    if(hasMsg){
+      if(name&&name.k==='str') out.push({node:name,type:'name'});
+      for(var bi=0;bi<blockOut.length;bi++) out.push(blockOut[bi]);
+    } else if(name&&name.k==='str'){
+      // Name-only block (e.g. phonechat sticker/stamp with lane=N and name={name="..."} but no ja/message).
+      // Keep isolated as orphanName so it never leaks into the next dialogue block's speaker name.
+      out.push({node:name,type:'orphanName'});
     }
   }
   return out;
@@ -530,6 +546,7 @@ function extractFromAst(scriptText,sg){
   var entries=[],pendingNames=[];
   for(var i=0;i<nodes.length;i++){
     var n=nodes[i];
+    if(n.type==='orphanName') continue;
     var raw=n.node.k==='str'?n.node.v:serializeAstMessage(n.node);
     if(n.type==='name'){pendingNames.push(raw);continue}
     entries.push({names:pendingNames,message:raw});
@@ -558,9 +575,10 @@ function extractFromAst(scriptText,sg){
 function repackAst(scriptText,tagStore,translations,wrapWidth,mlSep,rt2AsSpace){
   var roots=luaParseDocument(scriptText);
   var nodes=getAstStringNodes(roots);
-  var entries=[],pendingNameNodes=[];
+  var entries=[],pendingNameNodes=[],orphanNameNodes=[];
   for(var i=0;i<nodes.length;i++){
     var n=nodes[i];
+    if(n.type==='orphanName'){orphanNameNodes.push(n.node);continue}
     if(n.type==='name'){pendingNameNodes.push(n.node);continue}
     // Standardize every message container's formatting on rebuild, not just the
     // ones translated this pass – otherwise translated lines explode (one segment
@@ -570,6 +588,7 @@ function repackAst(scriptText,tagStore,translations,wrapWidth,mlSep,rt2AsSpace){
     entries.push({nameNodes:pendingNameNodes,messageNode:n.node});
     pendingNameNodes=[];
   }
+  var speakerNameMap=new Map();
   var tKeys=Object.keys(translations);
   for(var ti=0;ti<tKeys.length;ti++){
     var idx=parseInt(tKeys[ti],10);
@@ -592,7 +611,20 @@ function repackAst(scriptText,tagStore,translations,wrapWidth,mlSep,rt2AsSpace){
       for(var tr=0;tr<trail;tr++) entry.messageNode.items.push(LTable([LStr('rt2')]));
     }
     if(entry.nameNodes.length && newName && newName.trim() && newName.toLowerCase()!=='narasi'){
-      for(var ni=0;ni<entry.nameNodes.length;ni++) entry.nameNodes[ni].v=newName;
+      var cleanNewName=newName.trim();
+      for(var ni=0;ni<entry.nameNodes.length;ni++){
+        var origSpk=entry.nameNodes[ni].v;
+        if(origSpk && !speakerNameMap.has(origSpk)) speakerNameMap.set(origSpk, cleanNewName);
+        entry.nameNodes[ni].v=cleanNewName;
+      }
+    }
+  }
+  // Translate name-only blocks (e.g. phonechat stickers) cleanly using the mapped speaker names
+  // from the same file without ever merging or leaking names across blocks.
+  for(var oi=0;oi<orphanNameNodes.length;oi++){
+    var onode=orphanNameNodes[oi];
+    if(onode && onode.k==='str' && speakerNameMap.has(onode.v)){
+      onode.v=speakerNameMap.get(onode.v);
     }
   }
   return roots.map(function(r){return luaToString(r)}).join('\n')+'\n';
