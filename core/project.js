@@ -22,7 +22,7 @@ export const DEFAULT_PROMPTS = {
     '- Translate character dialogue naturally as spoken English, and narration as fluent narrative prose.',
     '- Maintain a strict 1:1 line correspondence. Never merge, split, reorder, or omit lines.',
     '- Preserve all control markers and formatting tags, including <BR>, <T1>, and similar markers, exactly as they appear.',
-    '- Preserve quotation marks and dialogue formatting where applicable.',
+    '- Always preserve Japanese corner brackets 「」 and 『』 verbatim — never replace them with ASCII "..." quotes.',
     '- Output only the translated script. No explanations or additional commentary.',
     '- Wrap the entire translated output in a single Markdown code block. Do not use multiple code blocks.',
     'Interpret ambiguous expressions according to the surrounding context rather than translating them literally. Preserve subtext, implications, and character-specific speech patterns without adding meaning that isn\'t present in the original.'
@@ -35,7 +35,7 @@ export const DEFAULT_PROMPTS = {
     '- Terjemahkan dialog karakter secara alami layaknya percakapan lisan, dan narasi sebagai prosa naratif yang mengalir.',
     '- Pertahankan kesesuaian baris 1:1 secara ketat. Jangan menggabungkan, memecah, mengubah urutan, atau melewati baris mana pun.',
     '- Pertahankan semua penanda kontrol dan tag format, termasuk <BR>, <T1>, dan penanda serupa persis seperti aslinya.',
-    '- Pertahankan tanda kutip dan format dialog sebagaimana mestinya.',
+    '- Selalu pertahankan tanda kutip Jepang 「」 dan 『』 apa adanya — jangan pernah menggantinya dengan kutip biasa "...".',
     '- Keluarkan hanya naskah hasil terjemahan. Tanpa penjelasan atau komentar tambahan.',
     '- Bungkus seluruh hasil terjemahan dalam satu blok kode Markdown tunggal (single Markdown code block). Jangan gunakan banyak blok kode.',
     'Tafsirkan ungkapan yang ambigu sesuai konteks kalimat di sekitarnya, bukan diterjemahkan secara harfiah kata per kata. Pertahankan subteks, implikasi, dan ciri khas gaya bicara tiap karakter tanpa menambahkan makna yang tidak ada di teks asli.'
@@ -716,9 +716,39 @@ export async function applyBatch(store, pid, text, { autofix = true } = {}) {
   return res;
 }
 
-// Output-time quote conversion: 「 」 → " " / “ ”, 『 』 → ' ' / ‘ ’. Stored translations are never modified.
-export function convertJpQuotes(text, mode) {
-  if (!text || !mode || mode === 'keep') return text;
+// Output-time quote conversion:
+// - mode === 'keep': keep 「 」 / 『 』 and restore them when AI replaced outer JP brackets with "..." / “...” or dropped them while srcText had them.
+// - mode === 'ascii' / 'curly': 「 」 → " " / “ ”, 『 』 → ' ' / ‘ ’. Stored translations are never modified.
+export function convertJpQuotes(text, mode, srcText) {
+  if (!text) return text;
+  if (!mode || mode === 'keep') {
+    if (!srcText) return text;
+    const cleanSrc = String(srcText).replace(/(?:<T\d+>|<BR>)/g, '').trim();
+    let openJp = '', closeJp = '';
+    if (cleanSrc.startsWith('「') && cleanSrc.endsWith('」')) { openJp = '「'; closeJp = '」'; }
+    else if (cleanSrc.startsWith('『') && cleanSrc.endsWith('』')) { openJp = '『'; closeJp = '』'; }
+    if (!openJp) return text;
+
+    const leadM = text.match(/^(\s*(?:<T\d+>\s*)*)/);
+    const trailM = text.match(/((?:\s*<T\d+>)*\s*)$/);
+    const lead = leadM ? leadM[1] : '';
+    const trail = trailM ? trailM[1] : '';
+    const core = text.slice(lead.length, text.length - trail.length);
+    if (!core) return text;
+
+    if (/[「」『』]/.test(core)) {
+      return text;
+    }
+    if (
+      (core.startsWith('"') && core.endsWith('"') && core.length >= 2) ||
+      (core.startsWith('“') && core.endsWith('”') && core.length >= 2) ||
+      (core.startsWith("'") && core.endsWith("'") && core.length >= 2) ||
+      (core.startsWith('‘') && core.endsWith('’') && core.length >= 2)
+    ) {
+      return lead + openJp + core.slice(1, -1) + closeJp + trail;
+    }
+    return lead + openJp + core + closeJp + trail;
+  }
   const m = mode === 'curly' ? { '「': '“', '」': '”', '『': '‘', '』': '’' } : { '「': '"', '」': '"', '『': "'", '』': "'" };
   return text.replace(/[「」『』]/g, c => m[c]);
 }
@@ -741,7 +771,7 @@ export async function repackFile(store, fid, opts = {}) {
         ? e.tgtName.trim()
         : ((e.name && !isNarrationSpeaker(e.name) && !isChoiceSpeaker(e.name) && e.name !== 'Dialog') ? e.name.trim() : '');
       const spkOut = rawSpk ? (sg.length ? applyGls(rawSpk, sg) : rawSpk) : 'Narasi';
-      trans[e.idx] = [spkOut, (!guarded || /[「」『』]/.test(e.src)) ? convertJpQuotes(safeTgt, qm) : safeTgt];
+      trans[e.idx] = [spkOut, (!guarded || /[「」『』]/.test(e.src)) ? convertJpQuotes(safeTgt, qm, e.src) : safeTgt];
     }
   }
   const log = opts.log || (f.kind === 'scn' ? createLog({ cap: 500, meta: { name: f.name, path: f.path || f.name, size: blob.bytes ? blob.bytes.length : 0, kind: f.kind } }) : null);

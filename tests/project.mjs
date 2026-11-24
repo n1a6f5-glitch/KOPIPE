@@ -313,4 +313,15 @@ await t('v0.5.3: exact EN/ID prompts, Markdown code-block stripping, Polish QC b
   assert.match(astOut, /\{"rt2"\}/, 'wrapped Artemis .ast uses {"rt2"} separator');
 });
 
+await t('quoteMode=keep restores 「」 / 『』 when AI outputs ASCII quotes or drops them', async () => {
+  assert.equal(P.convertJpQuotes('"Yeah... I guess so."', 'keep', '「そうだね……」'), '「Yeah... I guess so.」');
+  assert.equal(P.convertJpQuotes('“Yeah... I guess so.”', 'keep', '「そうだね……」'), '「Yeah... I guess so.」');
+  assert.equal(P.convertJpQuotes('Yeah... I guess so.', 'keep', '「そうだね……」'), '「Yeah... I guess so.」');
+  assert.equal(P.convertJpQuotes('"Inner thought"', 'keep', '『心の声』'), '『Inner thought』');
+  assert.equal(P.convertJpQuotes('<T0>"Tagged"<T1>', 'keep', '<T0>「タグ付き」<T1>'), '<T0>「Tagged」<T1>');
+  assert.equal(P.convertJpQuotes('Narration stays plain.', 'keep', 'ナレーション。'), 'Narration stays plain.');
+  assert.equal(P.convertJpQuotes('「Already ok」', 'keep', '「そのまま」'), '「Already ok」');
+  assert.equal(P.convertJpQuotes('「Hello」', 'ascii', '「こんにちは」'), '"Hello"');
+});
+
 console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

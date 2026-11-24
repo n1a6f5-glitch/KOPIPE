@@ -282,7 +282,7 @@ function formatVnPreviewText(rawTgt, rawSrc) {
   const base = (rawTgt && rawTgt.trim()) ? P.stripAllTagsForAi(rawTgt) : P.stripAllTagsForAi(rawSrc);
   const withBr = String(base || '').split('<BR>').join('\n');
   const qm = (proj && proj.settings && proj.settings.quoteMode) || 'keep';
-  const quoted = P.convertJpQuotes(withBr, qm);
+  const quoted = P.convertJpQuotes(withBr, qm, rawSrc);
   const ww = (proj && proj.settings && proj.settings.wrapWidth) || 0;
   if (ww > 0) {
     return quoted.split('\n').map(seg => wrapText(seg, ww, '\n')).join('\n');
