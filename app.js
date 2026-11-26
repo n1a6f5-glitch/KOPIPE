@@ -61,7 +61,7 @@ const TABS = [
 let store, proj = null, installEvt = null, qcAbort = null, swReg = null, updatePreviewFn = null;
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; if (store && !proj) render(); });
 const S = {
-  tab: 'edit', scope: '', fid: '', folder: '', status: '', q: '', page: 1,
+  tab: 'edit', scope: '', fid: '', folder: '', status: '', q: '', onlyChoices: false, page: 1,
   batchFrom: null, batchStatus: 'todo',
   qcPage: 1, qcFilter: 'all', qcTargetMode: 'polish', qcFrom: 1,
   qcRev: 1, qcCache: null,
@@ -550,7 +550,7 @@ async function renderEdit(v) {
 
   const chips = h('div', { class: 'row' },
     statusItems.map(([k, l]) => h('button', { class: 'chip' + (S.status === k ? ' on' : ''), onclick: () => { S.status = k; S.page = 1; render(); } }, l)),
-    h('button', { class: 'chip' + (S.q.toLowerCase() === 'choice' ? ' on' : ''), title: 'Filter only branching choice options (Choice / Pilihan)', onclick: () => { S.q = S.q.toLowerCase() === 'choice' ? '' : 'Choice'; S.page = 1; render(); } }, 'Choices'),
+    h('button', { class: 'chip' + (S.onlyChoices ? ' on' : ''), title: 'Filter only branching choice options (Choice / Pilihan)', onclick: () => { S.onlyChoices = !S.onlyChoices; S.page = 1; render(); } }, 'Choices'),
     h('button', { class: 'chip', style: 'margin-left:auto', onclick: () => openFindReplaceModal() }, 'Find & Replace'),
     h('label', { class: 'pill-chk', title: 'Show live Visual Novel message box preview while editing' }, prevChk, 'VN Box Preview'),
     h('label', { class: 'pill-chk', title: 'Hide <T#> tags and reattach them automatically on save' }, hideTagsChk, 'Auto-tag')
@@ -597,12 +597,13 @@ async function renderEdit(v) {
       fids: rfids && rfids.length > 1 ? rfids : undefined,
       status: S.status || undefined,
       q: S.q || undefined,
+      onlyChoices: S.onlyChoices,
       offset: 0,
       limit: 1,
       gidFrom: targetGid
     });
     if (!before.items.length) { toast(`Line #${targetGid} not found in current filter`); return; }
-    if (!S.fid && !S.folder && !S.status && !S.q) {
+    if (!S.fid && !S.folder && !S.status && !S.q && !S.onlyChoices) {
       S.page = Math.max(1, Math.ceil(targetGid / PAGE));
     } else {
       const allMatching = await P.listEntries(store, proj.id, { fid: S.fid || undefined, folder: S.folder || undefined, status: S.status || undefined, q: S.q || undefined });
@@ -619,6 +620,7 @@ async function renderEdit(v) {
       fids: rfids && rfids.length > 1 ? rfids : undefined,
       status: S.status || undefined,
       q: S.q || undefined,
+      onlyChoices: S.onlyChoices,
       offset: (S.page - 1) * PAGE,
       limit: PAGE
     });

@@ -528,7 +528,7 @@ export async function listEntries(store, pid, { fid, folder, fids, status, q } =
   return es;
 }
 
-export async function listEntriesPage(store, pid, { fid, folder, fids, status, q, offset = 0, limit = 50, gidFrom = 0 } = {}) {
+export async function listEntriesPage(store, pid, { fid, folder, fids, status, q, onlyChoices = false, offset = 0, limit = 50, gidFrom = 0 } = {}) {
   const p = await ensureMigrated(store, pid);
   if (!p) return { items: [], total: 0 };
   let rfids = fids;
@@ -542,7 +542,7 @@ export async function listEntriesPage(store, pid, { fid, folder, fids, status, q
   const multiFids = !singleFid && rfids && rfids.length > 1 ? rfids : undefined;
 
   let knownTotal = null;
-  if (!q && !gidFrom) {
+  if (!q && !gidFrom && !onlyChoices) {
     if (!singleFid && !multiFids) {
       knownTotal = status ? (p.stats[status] || 0) : (p.stats.total || 0);
     } else if (singleFid) {
@@ -560,6 +560,7 @@ export async function listEntriesPage(store, pid, { fid, folder, fids, status, q
     fids: multiFids,
     status: status || undefined,
     q: q || undefined,
+    onlyChoices: !!onlyChoices,
     gidFrom,
     offset,
     limit,

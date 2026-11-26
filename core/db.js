@@ -33,10 +33,11 @@ function buildSearchHaystack(e) {
   ).toLowerCase();
 }
 
-function matchEntryFilter(e, { fid, fidSet, status, qLow, gidFrom }) {
+function matchEntryFilter(e, { fid, fidSet, status, qLow, gidFrom, onlyChoices }) {
   if (fid && e.fid !== fid) return false;
   if (fidSet && !fidSet.has(e.fid)) return false;
   if (status && e.status !== status) return false;
+  if (onlyChoices && !(e.kind === 'C' || (e.name || '').toLowerCase() === 'choice')) return false;
   if (gidFrom && e.gid < gidFrom) return false;
   if (qLow) {
     const hay = buildSearchHaystack(e);
@@ -58,16 +59,16 @@ export function createMemoryStore() {
     async where(table, field, value) { return [...t[table].values()].filter(r => r[field] === value).map(clone); },
     async deleteWhere(table, field, value) { for (const [k, r] of [...t[table]]) if (r[field] === value) t[table].delete(k); },
     async queryEntries(pid, opts = {}) {
-      const { fid, fids, status, q, gidFrom = 0, offset = 0, limit = 0, knownTotal } = opts;
+      const { fid, fids, status, q, onlyChoices = false, gidFrom = 0, offset = 0, limit = 0, knownTotal } = opts;
       const fidSet = fids && fids.length ? new Set(fids) : null;
       const qLow = q ? q.trim().toLowerCase() : '';
       const all = [];
       for (const r of t.entries.values()) {
         if (r.pid !== pid) continue;
-        if (matchEntryFilter(r, { fid, fidSet, status, qLow, gidFrom })) all.push(r);
+        if (matchEntryFilter(r, { fid, fidSet, status, qLow, gidFrom, onlyChoices })) all.push(r);
       }
       all.sort((a, b) => a.gid - b.gid);
-      const total = knownTotal != null && !qLow && !gidFrom ? knownTotal : all.length;
+      const total = knownTotal != null && !qLow && !gidFrom && !onlyChoices ? knownTotal : all.length;
       const slice = limit > 0 ? all.slice(offset, offset + limit) : (offset > 0 ? all.slice(offset) : all);
       return { items: slice.map(clone), total };
     }
@@ -116,13 +117,13 @@ export function createIdbStore(name = 'kopipe') {
       c.onerror = () => rej(c.error);
     })),
     queryEntries: (pid, opts = {}) => run(['entries'], 'readonly', tx => new Promise((res, rej) => {
-      const { fid, fids, status, q, gidFrom = 0, offset = 0, limit = 0, knownTotal } = opts;
+      const { fid, fids, status, q, onlyChoices = false, gidFrom = 0, offset = 0, limit = 0, knownTotal } = opts;
       const fidSet = fids && fids.length ? new Set(fids) : null;
       const qLow = q ? q.trim().toLowerCase() : '';
       const os = tx.objectStore('entries');
 
       // Fast indexed cursor path when no text filter or multi-file set filter is needed
-      const canUseDirectIndex = !qLow && !fidSet && (
+      const canUseDirectIndex = !qLow && !fidSet && !onlyChoices && (
         (!fid && !status && os.indexNames.contains('pid_gid')) ||
         (!fid && status && os.indexNames.contains('pid_status_gid')) ||
         (fid && !status && os.indexNames.contains('fid_gid'))
