@@ -118,13 +118,17 @@ export async function importScript(name, bytes, opts = {}) {
   else if (kind === 'artemis-txt') { const ex = extractFromArtemisTxt(dec.text, sg); res = { kind, meta, ...pick(ex) }; }
   else if (kind === 'txt') { const pb = parseTxtBlocks(dec.text); const ex = extractFromTxt(pb.blocks, sg); return { kind, meta, ...pick(ex) }; }
   else {
-    // ast: structural first, generic regex fallback when nothing found
-    let ex = extractFromAst(dec.text, sg);
-    if (ex.entryCount) res = { kind: 'ast', meta: { ...meta, astver: ex.astver || null }, ...pick(ex) };
-    else {
+    // ast: structural first, generic regex fallback only when file isn't a valid non-dialog .ast (e.g. brandlogo.ast)
+    const astLang = (opts.astLang === 'en' || opts.astLang === 'id') ? opts.astLang : 'ja';
+    let ex = extractFromAst(dec.text, sg, { astLang });
+    if (ex.entryCount) {
+      res = { kind: 'ast', meta: { ...meta, astver: ex.astver || null, astLang }, ...pick(ex), initialTranslations: ex.initialTranslations || null };
+    } else if (ex.noText) {
+      res = { kind: 'ast', meta: { ...meta, astver: ex.astver || null, astLang, noText: true }, lines: [], tagStore: {}, entryCount: 0 };
+    } else {
       const langs = detectAstLanguages(dec.text), key = langs.includes('ja') ? 'ja' : langs[0];
       if (key) { ex = extractFromAstGeneric(dec.text, key, sg); res = { kind: 'ast-generic', meta: { ...meta, langKey: key }, ...pick(ex) }; }
-      else res = { kind: 'ast', meta, lines: [], tagStore: {}, entryCount: 0 };
+      else res = { kind: 'ast', meta: { ...meta, astLang }, lines: [], tagStore: {}, entryCount: 0 };
     }
   }
   if (log) {
@@ -165,15 +169,16 @@ export async function exportScript(rec, translations, opts = {}) {
   else if (k === 'artemis-txt') out = repackArt(dec.text, rec.tagStore, translations, ww, nl);
   else if (k === 'txt') { out = repackTxt(parseTxtBlocks(dec.text).rawLines, rec.tagStore, translations, ww, nl); if (meta.crlf) out = out.replace(/\r?\n/g, '\r\n'); }
   else if (k === 'ast') {
+    const astLang = (meta.astLang === 'en' || meta.astLang === 'id') ? meta.astLang : ((opts.astLang === 'en' || opts.astLang === 'id') ? opts.astLang : 'ja');
     const useRt2Wrap = opts.wrapSep === 'rt2' || !!opts.rt2AsSpace;
     if (useRt2Wrap && ww > 0) {
       const cleanTrans = {};
       for (const [idx, val] of Object.entries(translations || {})) {
         cleanTrans[idx] = [val[0], String(val[1] || '').split('<BR>').join(' ').replace(/\s{2,}/g, ' ').trim()];
       }
-      out = repackAst(dec.text, rec.tagStore, cleanTrans, ww, '\r\n', false);
+      out = repackAst(dec.text, rec.tagStore, cleanTrans, ww, '\r\n', false, { astLang });
     } else {
-      out = repackAst(dec.text, rec.tagStore, translations, ww, nl, !!opts.rt2AsSpace);
+      out = repackAst(dec.text, rec.tagStore, translations, ww, nl, !!opts.rt2AsSpace, { astLang });
     }
   }
   else if (k === 'ast-generic') out = repackAstGeneric(dec.text, rec.tagStore, translations, ww, nl, meta.langKey || 'ja');

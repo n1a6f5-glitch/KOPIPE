@@ -301,19 +301,28 @@ export async function addFile(store, pid, name, bytes, opts = {}) {
   const ex = await importScript(bName, u8, { sg, ...opts, log });
   const fid = uid();
   const entries = [];
+  const initTr = ex.initialTranslations || null;
+  const fStats = { total: 0, todo: 0, draft: 0, done: 0, flag: 0 };
   for (const l of ex.lines) {
     const m = LINE_RE.exec(l); if (!m) continue;
-    const body = m[4] || '', nm = m[2];
+    const idx = m[1], body = m[4] || '', nm = m[2];
+    const init = initTr && initTr[idx];
+    const hasInit = !!(init && init.tgt && init.tgt.trim());
+    const st = hasInit ? 'done' : 'todo';
     entries.push({
-      id: uid(), pid, fid, idx: m[1], gid: p.nextGid++,
-      name: nm, src: body, tgt: '', tgtName: '', status: 'todo',
+      id: uid(), pid, fid, idx, gid: p.nextGid++,
+      name: nm, src: body,
+      tgt: hasInit ? init.tgt : '',
+      tgtName: hasInit ? (init.tgtName || '') : '',
+      status: st,
       kind: detectEntryKind(nm, body)
     });
+    fStats.total++;
+    fStats[st]++;
   }
   if (ex.kind === 'scn' && entries.length === 0 && summarizeLog(log) === 'ok') {
     log.warn('entries', 'Berkas .scn menghasilkan 0 entri teks');
   }
-  const fStats = { total: entries.length, todo: entries.length, draft: 0, done: 0, flag: 0 };
   const logJson = log.toJSON ? log.toJSON() : { entries: log.entries || [], status: summarizeLog(log) };
   const file = {
     id: fid, pid, name: bName, path: relPath, size: u8.length,
@@ -324,8 +333,9 @@ export async function addFile(store, pid, name, bytes, opts = {}) {
   await store.put('blobs', { id: fid, pid, bytes: new Uint8Array(u8), tagStore: ex.tagStore });
   await store.put('files', file);
   await putEntriesChunked(store, entries);
-  p.stats.total += entries.length;
-  p.stats.todo += entries.length;
+  p.stats.total += fStats.total;
+  p.stats.todo += fStats.todo;
+  p.stats.done += fStats.done;
   await touch(store, p);
   const c = getCache(store, pid);
   if (c.files) c.files.push({ ...file });
@@ -371,12 +381,25 @@ export async function updateFileSource(store, fid, bytes, opts = {}) {
       else if (match && (!match.tgt || !match.tgt.trim())) match = null;
     }
     const gid = (i < oldEntries.length) ? oldEntries[i].gid : p.nextGid++;
+    const astLangChanged = ex.kind === 'ast' && ((f.meta && f.meta.astLang) || 'ja') !== ((ex.meta && ex.meta.astLang) || 'ja');
+    const initTr = ex.initialTranslations || null;
+    const init = initTr && initTr[idx];
     let tgt = '', tgtName = '', status = 'todo', note;
-    if (match && match.tgt && match.tgt.trim()) {
+    if (astLangChanged && init && init.tgt && init.tgt.trim()) {
+      tgt = init.tgt;
+      tgtName = init.tgtName || '';
+      status = 'done';
+      kept++;
+    } else if (!astLangChanged && match && match.tgt && match.tgt.trim()) {
       tgt = match.tgt;
       tgtName = match.tgtName || '';
       status = match.status === 'done' ? 'done' : 'draft';
       if (!checkTags(body, tgt)) { status = 'flag'; note = 'tag <T#> tidak cocok'; }
+      kept++;
+    } else if (init && init.tgt && init.tgt.trim()) {
+      tgt = init.tgt;
+      tgtName = init.tgtName || '';
+      status = 'done';
       kept++;
     }
     const rec = { id: (match && match.id) || uid(), pid: f.pid, fid, idx, gid, name: nm, src: body, tgt, tgtName, status, kind: detectEntryKind(nm, body) };
@@ -838,6 +861,7 @@ export async function importFolderBatch(store, pid, rawItems, opts = {}) {
     txtHint = 'auto',
     vntpFilter = false,
     scnLang = 0,
+    astLang = 'ja',
     onDuplicate = 'update',
     dryRun = false,
     onProgress,
@@ -907,7 +931,7 @@ export async function importFolderBatch(store, pid, rawItems, opts = {}) {
     const log = createLog({ cap: 500, meta: { name: item.name, path: item.path, size: bytes.length } });
     try {
       if (dryRun) {
-        const ex = await importScript(item.name, bytes, { sg, txtHint, vntpFilter, scnLang, log });
+        const ex = await importScript(item.name, bytes, { sg, txtHint, vntpFilter, scnLang, astLang, log });
         if (ex.kind === 'scn' && ex.entryCount === 0 && summarizeLog(log) === 'ok') {
           log.warn('entries', 'Berkas .scn menghasilkan 0 entri teks');
         }
@@ -921,7 +945,7 @@ export async function importFolderBatch(store, pid, rawItems, opts = {}) {
         summary.totalEntries += ex.entryCount;
         summary.results.push({ path: item.path, name: item.name, kind: ex.kind, status: st === 'ok' && ex.entryCount === 0 ? 'warn' : st, entryCount: ex.entryCount, log: logJson });
       } else if (existing && onDuplicate === 'update') {
-        const r = await updateFileSource(store, existing.id, bytes, { txtHint, vntpFilter, scnLang, log });
+        const r = await updateFileSource(store, existing.id, bytes, { txtHint, vntpFilter, scnLang, astLang, log });
         const st = r.file.logStatus || summarizeLog(r.log);
         if (r.count === 0) summary.zeroEntryFiles.push(item.path);
         if (st === 'error') summary.errorCount++;
@@ -931,7 +955,7 @@ export async function importFolderBatch(store, pid, rawItems, opts = {}) {
         summary.totalEntries += r.count;
         summary.results.push({ id: r.file.id, path: item.path, name: item.name, kind: r.file.kind, status: st === 'ok' && r.count === 0 ? 'warn' : st, entryCount: r.count, kept: r.kept, log: r.log });
       } else {
-        const r = await addFile(store, pid, item.name, bytes, { path: item.path, txtHint, vntpFilter, scnLang, log });
+        const r = await addFile(store, pid, item.name, bytes, { path: item.path, txtHint, vntpFilter, scnLang, astLang, log });
         existingByPath.set(item.path, r.file);
         const st = r.file.logStatus || summarizeLog(r.log);
         if (r.count === 0) summary.zeroEntryFiles.push(item.path);
@@ -1297,7 +1321,7 @@ export async function renameSpeakerGlobally(store, pid, rawName, translatedName)
 }
 
 // Re-parse all stored files in IndexedDB using the updated parser while keeping all existing translations
-export async function reparseStoredFiles(store, pid, { onProgress, scnLang } = {}) {
+export async function reparseStoredFiles(store, pid, { onProgress, scnLang, astLang } = {}) {
   const files = await listFiles(store, pid);
   let updatedFiles = 0, addedLines = 0, keptLines = 0;
   for (let i = 0; i < files.length; i++) {
@@ -1309,7 +1333,8 @@ export async function reparseStoredFiles(store, pid, { onProgress, scnLang } = {
     const oldCount = f.entryCount || 0;
     const hint = f.kind === "artemis-txt" ? "artemis" : f.kind === "txt" ? "kirikiri" : "auto";
     const effScnLang = (typeof scnLang === 'number') ? scnLang : ((f.meta && typeof f.meta.scnLang === 'number') ? f.meta.scnLang : 0);
-    const r = await updateFileSource(store, f.id, blob.bytes, { txtHint: hint, vntpFilter: !!(f.meta && f.meta.vntpFilter), scnLang: effScnLang });
+    const effAstLang = (astLang === 'en' || astLang === 'id' || astLang === 'ja') ? astLang : ((f.meta && f.meta.astLang) || 'ja');
+    const r = await updateFileSource(store, f.id, blob.bytes, { txtHint: hint, vntpFilter: !!(f.meta && f.meta.vntpFilter), scnLang: effScnLang, astLang: effAstLang });
     updatedFiles++;
     addedLines += Math.max(0, r.count - oldCount);
     keptLines += r.kept || 0;

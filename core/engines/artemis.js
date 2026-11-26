@@ -278,14 +278,14 @@ function luaReadTable(text,state){
   }
   return LTable(items);
 }
-function luaWriteNode(node,out,indentLevel){
+function luaWriteNode(node,out,indentLevel,eol){
   if(node.k==='str'){ out.push(luaQuoteC(node.v)); return; }
   if(node.k==='num'){ out.push(node.v); return; }
   if(node.k==='attr'){
     // reference: digit-leading names -> [N]; we additionally quote names that aren't valid identifiers (["a b"]) so output stays parseable
     out.push(/^[0-9]/.test(node.name) ? ('['+node.name+']') : /^[\p{L}_][\p{L}\p{Nd}_]*$/u.test(node.name) ? node.name : '['+luaQuoteC(node.name)+']');
     out.push('=');
-    luaWriteNode(node.v,out,indentLevel);
+    luaWriteNode(node.v,out,indentLevel,eol);
     return;
   }
   if(node.k==='table'){
@@ -298,7 +298,8 @@ function luaWriteNode(node,out,indentLevel){
     // string/attr children", so there's no way to tell them apart from local
     // structure alone; forceExplode is the tag that says "this one is a message".
     var hasChildTables=node.forceExplode||node.items.some(function(i){return i.k==='table'||(i.k==='attr'&&i.v.k==='table')});
-    out.push('{'); if(hasChildTables) out.push('\n');
+    var nl = eol || '\n';
+    out.push('{'); if(hasChildTables) out.push(nl);
     // No leading-space indentation on purpose: the original .ast dumps use newlines
     // between entries but no per-level padding. For files with thousands of numbered
     // dialogue entries, 4-space-per-nesting-level indentation balloons the rebuilt
@@ -307,9 +308,9 @@ function luaWriteNode(node,out,indentLevel){
     // newlines for structure/diffability, drop the padding.
     var lvl=indentLevel+1;
     for(var i=0;i<node.items.length;i++){
-      luaWriteNode(node.items[i],out,lvl);
+      luaWriteNode(node.items[i],out,lvl,nl);
       var isLast=i===node.items.length-1;
-      if(hasChildTables){ out.push(','); out.push('\n'); }
+      if(hasChildTables){ out.push(','); out.push(nl); }
       else if(!isLast){ out.push(','); }
     }
     out.push('}');
@@ -317,7 +318,7 @@ function luaWriteNode(node,out,indentLevel){
   }
   throw new Error('Unknown Lua node kind: '+node.k);
 }
-function luaToString(node){ var out=[]; luaWriteNode(node,out,0); return out.join(''); }
+function luaToString(node, eol){ var out=[]; luaWriteNode(node,out,0,eol||'\n'); return out.join(''); }
 
 function luaParseDocument(text){
   var state={pos:0}, roots=[];
@@ -328,9 +329,42 @@ function findRootAttr(roots,name){
   for(var i=0;i<roots.length;i++) if(roots[i].k==='attr'&&roots[i].name===name) return roots[i].v;
   return undefined;
 }
+function tableFindAttrIdx(tbl, key){
+  if(!tbl||tbl.k!=='table') return -1;
+  for(var i=0;i<tbl.items.length;i++) if(tbl.items[i].k==='attr'&&tbl.items[i].name===key) return i;
+  return -1;
+}
+function tableSetAttrAfter(tbl, afterKeys, key, valNode){
+  if(!tbl||tbl.k!=='table') return;
+  var existingIdx = tableFindAttrIdx(tbl, key);
+  if(existingIdx >= 0){ tbl.items[existingIdx].v = valNode; return; }
+  var insertAt = tbl.items.length;
+  for(var a=0;a<afterKeys.length;a++){
+    var idx = tableFindAttrIdx(tbl, afterKeys[a]);
+    if(idx >= 0){ insertAt = idx + 1; break; }
+  }
+  tbl.items.splice(insertAt, 0, LAttr(key, valNode));
+}
+function setMultiLangNameAttr(nameTable, lang, translatedName){
+  if(!nameTable||nameTable.k!=='table') return;
+  // Never overwrite internal JP key name="..."! Ensure ja="..." exists, then set/update target lang.
+  if(tableFindAttrIdx(nameTable, 'ja') < 0){
+    var baseName = tableGet(nameTable, 'name');
+    if(baseName && baseName.k==='str'){
+      tableSetAttrAfter(nameTable, ['name'], 'ja', LStr(baseName.v));
+    }
+  }
+  var after = lang === 'id' ? ['en', 'ja', 'name'] : ['ja', 'name'];
+  tableSetAttrAfter(nameTable, after, lang, LStr(translatedName));
+}
+function normAstLang(opts){
+  var l = (opts && typeof opts.astLang === 'string') ? opts.astLang.toLowerCase().trim() : 'ja';
+  return (l === 'en' || l === 'id') ? l : 'ja';
+}
+
 function getAstStringNodes(roots){
   var ast=findRootAttr(roots,'ast');
-  if(!ast||ast.k!=='table') throw new Error('No "ast" attribute found in file');
+  if(!ast||ast.k!=='table') return [];
   // Dialogue can live in genuinely different places within the same file –
   // ast.text[N] (flat list) and/or ast[N] directly (numbered blocks alongside
   // unrelated anonymous command-list tables) – so both are always scanned and
@@ -349,7 +383,7 @@ function getAstStringNodes(roots){
 // positional table entries holding the message segments themselves. Returns
 // true iff this block actually had a "ja" field, so callers can tell whether
 // to try a different shape instead.
-function extractJaBlockEntries(block,out){
+function extractJaBlockEntries(block,out,nameTableRef){
   var jaT=tableGet(block,'ja');
   if(!jaT||jaT.k!=='table') return false;
   var msgs=[];
@@ -368,10 +402,12 @@ function extractJaBlockEntries(block,out){
     }
   }
   if(msgs.length){
-    if(nameNode) out.push({node:nameNode,type:'name'});
-    for(var mi=0;mi<msgs.length;mi++) out.push({node:msgs[mi],type:'message'});
+    if(nameNode) out.push({node:nameNode,type:'name',nameTable:nameCmd&&nameCmd.k==='table'?nameCmd:null});
+    for(var mi=0;mi<msgs.length;mi++){
+      out.push({node:msgs[mi],type:'message',block:block,msgIdx:mi,nameTable:nameTableRef||null});
+    }
   } else if(nameNode){
-    out.push({node:nameNode,type:'orphanName'});
+    out.push({node:nameNode,type:'orphanName',nameTable:nameCmd&&nameCmd.k==='table'?nameCmd:null});
   }
   return msgs.length > 0;
 }
@@ -383,34 +419,48 @@ function getAstStringNodesV1(ast){
     if(item.k!=='attr'||item.v.k!=='table') continue;
     var text=item.v;
     var nameTable=tableGet(text,'name');
+    var validNameTable=(nameTable&&nameTable.k==='table')?nameTable:null;
     // Confirmed against an existing published patch of this same game: when a
     // character has BOTH sub-fields, "name" stays untouched in Japanese (internal
     // reference key) and "ja" is the on-screen text that gets translated, e.g.
     // name={name="スヴェトラーナ", ja="Sve"}. But some characters only ever have the
     // "name" sub-field (no "ja" at all, e.g. name={name="香子"}) – for those, "name"
     // IS the display text, so fall back to it when "ja" isn't present.
-    var nameJa=tableGet(nameTable,'ja');
-    var name=nameTable&&nameTable.k==='table'?(nameJa&&nameJa.k==='str'?nameJa:tableGet(nameTable,'name')):undefined;
+    var nameJa=validNameTable?tableGet(validNameTable,'ja'):undefined;
+    var name=validNameTable?(nameJa&&nameJa.k==='str'?nameJa:tableGet(validNameTable,'name')):undefined;
     var blockOut=[], hasMsg=false;
     var select=tableGet(text,'select');
     if(select&&select.k==='table'){
-      for(var si=0;si<select.items.length;si++){
-        if(select.items[si].k==='str'){ blockOut.push({node:select.items[si],type:'message'}); hasMsg=true; }
+      var selectJa=tableGet(select,'ja');
+      if(selectJa&&selectJa.k==='table'){
+        for(var sji=0;sji<selectJa.items.length;sji++){
+          if(selectJa.items[sji].k==='str'){
+            blockOut.push({node:selectJa.items[sji],type:'select',selectTable:select,selectJa:selectJa,selectIdx:sji,block:text});
+            hasMsg=true;
+          }
+        }
+      } else {
+        for(var si=0;si<select.items.length;si++){
+          if(select.items[si].k==='str'){
+            blockOut.push({node:select.items[si],type:'select',selectTable:select,selectJa:null,selectIdx:si,block:text});
+            hasMsg=true;
+          }
+        }
       }
     }
-    if(extractJaBlockEntries(text,blockOut)){
+    if(extractJaBlockEntries(text,blockOut,validNameTable)){
       hasMsg=true;
     } else {
       var message=text.items.find(function(n){return n.k==='table'});
-      if(message){ blockOut.push({node:message,type:'message'}); hasMsg=true; }
+      if(message){ blockOut.push({node:message,type:'message',block:text,msgIdx:0,nameTable:validNameTable}); hasMsg=true; }
     }
     if(hasMsg){
-      if(name&&name.k==='str') out.push({node:name,type:'name'});
+      if(name&&name.k==='str') out.push({node:name,type:'name',nameTable:validNameTable});
       for(var bi=0;bi<blockOut.length;bi++) out.push(blockOut[bi]);
     } else if(name&&name.k==='str'){
       // Name-only block (e.g. phonechat sticker/stamp with lane=N and name={name="..."} but no ja/message).
       // Keep isolated as orphanName so it never leaks into the next dialogue block's speaker name.
-      out.push({node:name,type:'orphanName'});
+      out.push({node:name,type:'orphanName',nameTable:validNameTable});
     }
   }
   return out;
@@ -434,7 +484,7 @@ function getAstStringNodesBlocks(ast){
 
     var selectT=tableGet(block,'select');
     var select=selectT&&selectT.k==='table'?tableGet(selectT,'ja'):undefined;
-    if(select&&select.k==='table') for(var si=0;si<select.items.length;si++) if(select.items[si].k==='str') out.push({node:select.items[si],type:'message'});
+    if(select&&select.k==='table') for(var si=0;si<select.items.length;si++) if(select.items[si].k==='str') out.push({node:select.items[si],type:'select',selectTable:selectT,selectJa:select,selectIdx:si,block:block});
 
     var matchedWrapped=false;
     var textT=tableGet(block,'text');
@@ -517,7 +567,13 @@ function deserializeAstMessage(text,table,rt2AsSpace){
   for(var i=0;i<parts.length;i++){
     var p=parts[i];
     if(p.seg!==null){
-      table.items.push(LStr(prependSpace?' '+p.seg:p.seg));
+      var segText = p.seg;
+      if(prependSpace){
+        var prevIt = table.items.length ? table.items[table.items.length - 1] : null;
+        var prevEndsSp = prevIt && prevIt.k === 'str' && /\s$/.test(prevIt.v);
+        segText = (!prevEndsSp && !/^\s/.test(segText)) ? (' ' + segText) : segText.replace(/^\s+/, prevEndsSp ? '' : ' ');
+      }
+      table.items.push(LStr(segText));
       prependSpace=false;
     } else if(p.match==='\r\n'){
       // rt2AsSpace: drop the {"rt2"} line-break tag entirely and just fold the
@@ -540,56 +596,121 @@ function deserializeAstMessage(text,table,rt2AsSpace){
   table.forceExplode=true;
 }
 
-function extractFromAst(scriptText,sg){
+function readExistingLangTranslation(entry, astLang){
+  if(astLang === 'ja') return null;
+  var existingText = '';
+  var existingName = '';
+  if(entry.isSelect){
+    if(entry.selectTable){
+      var sLang = tableGet(entry.selectTable, astLang);
+      if(sLang && sLang.k === 'table' && sLang.items[entry.selectIdx] && sLang.items[entry.selectIdx].k === 'str'){
+        existingText = sLang.items[entry.selectIdx].v;
+      }
+    }
+  } else if(entry.block){
+    var bLang = tableGet(entry.block, astLang);
+    if(bLang && bLang.k === 'table'){
+      var msgTables = bLang.items.filter(function(it){ return it.k === 'table'; });
+      var targetTbl = msgTables[entry.msgIdx || 0] || msgTables[0];
+      if(targetTbl) existingText = serializeAstMessage(targetTbl);
+    }
+  }
+  if(entry.nameTable){
+    var nLang = tableGet(entry.nameTable, astLang);
+    if(nLang && nLang.k === 'str') existingName = nLang.v;
+  }
+  if(!existingText && !existingName) return null;
+  return { text: existingText, name: existingName };
+}
+
+function extractFromAst(scriptText,sg,opts){
+  var astLang = normAstLang(opts);
   var roots=luaParseDocument(scriptText);
+  var astRoot=findRootAttr(roots,'ast');
+  var av=findRootAttr(roots,'astver');
+  var hasTextTable=!!(astRoot && astRoot.k==='table' && tableGet(astRoot,'text'));
   var nodes=getAstStringNodes(roots);
-  var entries=[],pendingNames=[];
+  var entries=[],pendingNames=[],pendingNameTable=null;
   for(var i=0;i<nodes.length;i++){
     var n=nodes[i];
     if(n.type==='orphanName') continue;
     var raw=n.node.k==='str'?n.node.v:serializeAstMessage(n.node);
-    if(n.type==='name'){pendingNames.push(raw);continue}
-    entries.push({names:pendingNames,message:raw});
+    if(n.type==='name'){ pendingNames.push(raw); if(n.nameTable) pendingNameTable=n.nameTable; continue; }
+    entries.push({
+      names:pendingNames,
+      message:raw,
+      isSelect:n.type==='select',
+      selectTable:n.selectTable||null,
+      selectIdx:n.selectIdx||0,
+      block:n.block||null,
+      msgIdx:n.msgIdx||0,
+      nameTable:n.nameTable||pendingNameTable||null
+    });
     pendingNames=[];
+    pendingNameTable=null;
   }
-  var lines=[],tagStore={};
+  var lines=[],tagStore={},initialTranslations={};
+  var hasInit=false;
   for(var idx=0;idx<entries.length;idx++){
     var e=entries[idx];
-    var rawName=e.names.length?e.names.join(' / '):'Narasi';
-    var name=sg.length?applyGls(rawName,sg):rawName;
+    var rawName=e.isSelect ? 'Choice' : (e.names.length?e.names.join(' / '):'Narasi');
+    var name=e.isSelect ? 'Choice' : (sg.length?applyGls(rawName,sg):rawName);
     var dialog=sg.length?applyGls(e.message,sg):e.message;
-    // serializeAstMessage decodes {rt2} into a literal \r\n – if left as-is, a single
-    // dialogue entry with a mid-line break turns into TWO physical lines in the
-    // exported MT_Batch .txt, breaking the "1 entry = 1 line" contract the batch
-    // count (and any 1:1-per-line AI prompt) depends on. Fold it into a one-line
-    // placeholder here; repackAst restores it to \r\n right before rebuilding.
     dialog=dialog.split('\r\n').join('<BR>');
     var mt=maskTxtTags(dialog);
-    tagStore[idx]={tl:mt.tl,nameCount:e.names.length};
+    tagStore[idx]={tl:mt.tl,nameCount:e.names.length,isSelect:e.isSelect};
     lines.push('['+idx+'|'+name+'] '+mt.masked);
+
+    if(astLang !== 'ja'){
+      var existing = readExistingLangTranslation(e, astLang);
+      if(existing && existing.text && existing.text.trim()){
+        var exDlg = existing.text.split('\r\n').join('<BR>');
+        var exMt = maskTxtTags(exDlg);
+        initialTranslations[idx] = { tgt: exMt.masked, tgtName: existing.name || '' };
+        hasInit = true;
+      }
+    }
   }
-  var av=findRootAttr(roots,'astver');
-  return{lines:lines,tagStore:tagStore,entryCount:entries.length,astver:av&&av.k==='num'?av.v:null};
+  return{
+    lines:lines,
+    tagStore:tagStore,
+    entryCount:entries.length,
+    astver:av&&av.k==='num'?av.v:null,
+    astLang:astLang,
+    noText: !!(astRoot && astRoot.k==='table' && !hasTextTable && entries.length===0),
+    initialTranslations: hasInit ? initialTranslations : null
+  };
 }
 
-function repackAst(scriptText,tagStore,translations,wrapWidth,mlSep,rt2AsSpace){
+function repackAst(scriptText,tagStore,translations,wrapWidth,mlSep,rt2AsSpace,opts){
+  var astLang = normAstLang(opts);
   var roots=luaParseDocument(scriptText);
   var nodes=getAstStringNodes(roots);
-  var entries=[],pendingNameNodes=[],orphanNameNodes=[];
+  var entries=[],pendingNameNodes=[],pendingNameTables=[],orphanItems=[];
   for(var i=0;i<nodes.length;i++){
     var n=nodes[i];
-    if(n.type==='orphanName'){orphanNameNodes.push(n.node);continue}
-    if(n.type==='name'){pendingNameNodes.push(n.node);continue}
-    // Standardize every message container's formatting on rebuild, not just the
-    // ones translated this pass – otherwise translated lines explode (one segment
-    // per line) while untouched lines keep whatever compactness they happened to
-    // parse with, producing an inconsistent-looking file across a partial batch.
+    if(n.type==='orphanName'){ orphanItems.push({ node: n.node, nameTable: n.nameTable || null }); continue; }
+    if(n.type==='name'){ pendingNameNodes.push(n.node); if(n.nameTable) pendingNameTables.push(n.nameTable); continue; }
     if(n.node.k==='table') n.node.forceExplode=true;
-    entries.push({nameNodes:pendingNameNodes,messageNode:n.node});
+    entries.push({
+      nameNodes:pendingNameNodes,
+      nameTables:pendingNameTables.length ? pendingNameTables : (n.nameTable ? [n.nameTable] : []),
+      messageNode:n.node,
+      isSelect:n.type==='select',
+      selectTable:n.selectTable||null,
+      selectJa:n.selectJa||null,
+      selectIdx:n.selectIdx||0,
+      block:n.block||null,
+      msgIdx:n.msgIdx||0
+    });
     pendingNameNodes=[];
+    pendingNameTables=[];
   }
+  // Non-dialog .ast (e.g. brandlogo.ast / movie script) or empty translations: return original verbatim!
+  var tKeys=Object.keys(translations || {});
+  if(!entries.length || !tKeys.length) return scriptText;
+
   var speakerNameMap=new Map();
-  var tKeys=Object.keys(translations);
   for(var ti=0;ti<tKeys.length;ti++){
     var idx=parseInt(tKeys[ti],10);
     var entry=entries[idx];
@@ -601,33 +722,109 @@ function repackAst(scriptText,tagStore,translations,wrapWidth,mlSep,rt2AsSpace){
     var wrapped=wrapText(translatedMasked,wrapWidth,mlSep);
     var unmasked=unmaskTags(wrapped,store.tl||[]);
     unmasked=unmasked.split('<BR>').join('\r\n');
-    if(entry.messageNode.k==='str') entry.messageNode.v=unmasked;
-    else {
-      // serializeAstMessage trims, so a trailing {"rt2"} (end-of-message break) never reaches the batch; reference
-      // DeserializeMessage then drops it for every translated line. Re-attach it so line-ending behaviour is kept.
+
+    if(entry.isSelect){
+      if(astLang === 'ja'){
+        entry.messageNode.v = unmasked;
+        if(entry.selectJa) entry.selectJa.forceExplode = true;
+      } else if(entry.selectTable && entry.selectJa){
+        var targetSel = tableGet(entry.selectTable, astLang);
+        if(!targetSel || targetSel.k !== 'table'){
+          // Initialize from ja items so untranslated options keep valid fallback text
+          targetSel = LTable(entry.selectJa.items.map(function(it){ return it.k==='str' ? LStr(it.v) : it; }));
+          var afterSel = astLang === 'id' && tableFindAttrIdx(entry.selectTable, 'en') >= 0 ? ['en', 'ja'] : ['ja'];
+          tableSetAttrAfter(entry.selectTable, afterSel, astLang, targetSel);
+        }
+        targetSel.forceExplode = true;
+        if(targetSel.items[entry.selectIdx] && targetSel.items[entry.selectIdx].k === 'str'){
+          targetSel.items[entry.selectIdx].v = unmasked;
+        } else {
+          targetSel.items[entry.selectIdx] = LStr(unmasked);
+        }
+      } else {
+        entry.messageNode.v = unmasked;
+      }
+    } else if(entry.messageNode.k==='str'){
+      entry.messageNode.v=unmasked;
+    } else {
       var its=entry.messageNode.items, trail=0;
       while(trail<its.length && isRt2(its[its.length-1-trail])) trail++;
-      deserializeAstMessage(unmasked,entry.messageNode,rt2AsSpace);
-      for(var tr=0;tr<trail;tr++) entry.messageNode.items.push(LTable([LStr('rt2')]));
+      if(astLang === 'ja' || !entry.block){
+        deserializeAstMessage(unmasked,entry.messageNode,rt2AsSpace);
+        for(var tr=0;tr<trail;tr++) entry.messageNode.items.push(LTable([LStr('rt2')]));
+      } else {
+        // Multi-Lang mode: keep ja={...} untouched, inject or update en={...} / id={...} idempotently!
+        var langOuter = tableGet(entry.block, astLang);
+        var msgTable = LTable([]);
+        deserializeAstMessage(unmasked, msgTable, rt2AsSpace);
+        for(var tr2=0;tr2<trail;tr2++) msgTable.items.push(LTable([LStr('rt2')]));
+        if(langOuter && langOuter.k === 'table'){
+          var existingMsgs = [];
+          for(var lm=0;lm<langOuter.items.length;lm++) if(langOuter.items[lm].k==='table') existingMsgs.push(lm);
+          var slotIdx = existingMsgs[entry.msgIdx || 0];
+          if(typeof slotIdx === 'number') langOuter.items[slotIdx] = msgTable;
+          else langOuter.items.push(msgTable);
+          langOuter.forceExplode = true;
+        } else {
+          var newOuter = LTable([msgTable]);
+          newOuter.forceExplode = true;
+          var afterDlg = astLang === 'id' && tableFindAttrIdx(entry.block, 'en') >= 0 ? ['en', 'ja'] : ['ja'];
+          tableSetAttrAfter(entry.block, afterDlg, astLang, newOuter);
+        }
+      }
     }
-    if(entry.nameNodes.length && newName && newName.trim() && newName.toLowerCase()!=='narasi'){
+
+    if(!entry.isSelect && entry.nameNodes.length && newName && newName.trim() && newName.toLowerCase()!=='narasi' && newName.toLowerCase()!=='choice'){
       var cleanNewName=newName.trim();
       for(var ni=0;ni<entry.nameNodes.length;ni++){
         var origSpk=entry.nameNodes[ni].v;
         if(origSpk && !speakerNameMap.has(origSpk)) speakerNameMap.set(origSpk, cleanNewName);
-        entry.nameNodes[ni].v=cleanNewName;
+        if(astLang === 'ja'){
+          entry.nameNodes[ni].v=cleanNewName;
+        }
+      }
+      if(astLang !== 'ja'){
+        for(var nti=0;nti<entry.nameTables.length;nti++){
+          setMultiLangNameAttr(entry.nameTables[nti], astLang, cleanNewName);
+        }
       }
     }
   }
-  // Translate name-only blocks (e.g. phonechat stickers) cleanly using the mapped speaker names
-  // from the same file without ever merging or leaking names across blocks.
-  for(var oi=0;oi<orphanNameNodes.length;oi++){
-    var onode=orphanNameNodes[oi];
+  // Translate name-only blocks (e.g. phonechat stickers) cleanly using speakerNameMap
+  for(var oi=0;oi<orphanItems.length;oi++){
+    var oitem=orphanItems[oi];
+    var onode=oitem.node;
     if(onode && onode.k==='str' && speakerNameMap.has(onode.v)){
-      onode.v=speakerNameMap.get(onode.v);
+      var mappedName = speakerNameMap.get(onode.v);
+      if(astLang === 'ja'){
+        onode.v = mappedName;
+      } else if(oitem.nameTable){
+        setMultiLangNameAttr(oitem.nameTable, astLang, mappedName);
+      }
     }
   }
-  return roots.map(function(r){return luaToString(r)}).join('\n')+'\n';
+  // Ensure all select (ja/en/id) and multi-lang message containers stay cleanly exploded
+  for(var ei=0;ei<entries.length;ei++){
+    var ent = entries[ei];
+    if(ent.selectJa) ent.selectJa.forceExplode = true;
+    if(ent.selectTable){
+      ['ja','en','id'].forEach(function(lk){
+        var st = tableGet(ent.selectTable, lk);
+        if(st && st.k === 'table') st.forceExplode = true;
+      });
+    }
+    if(ent.block){
+      ['ja','en','id'].forEach(function(lk){
+        var bt = tableGet(ent.block, lk);
+        if(bt && bt.k === 'table'){
+          bt.forceExplode = true;
+          for(var bi=0;bi<bt.items.length;bi++) if(bt.items[bi].k==='table') bt.items[bi].forceExplode = true;
+        }
+      });
+    }
+  }
+  var eol = '\r\n';
+  return roots.map(function(r){return luaToString(r, eol)}).join(eol)+eol;
 }
 
 // ============================================================================

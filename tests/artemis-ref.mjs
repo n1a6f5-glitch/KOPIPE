@@ -145,4 +145,92 @@ ast = {
   assert.ok(/\[254\]=\{[\s\S]*?name="Munefuyu"/.test(out));
 });
 
+
+t('ast: select={ja={...}} extraction & Multi-Lang en/id repack (dialog, select, name, orphanName, idempotent, CRLF, no-double-space)', () => {
+  const raw = [
+    'ast={',
+    'text={',
+    '[1]={',
+    'name={name="皐"},',
+    'ja={{"「はい。",{"rt2"},"承知しました」"}},',
+    '},',
+    '[2]={',
+    'lane=1,',
+    'name={name="スヴェトラーナ",ja="スヴェ"},',
+    '},',
+    '[3]={',
+    'name={name="スヴェトラーナ",ja="スヴェ"},',
+    'ja={{"「おはよう」"}},',
+    '},',
+    '[264]={',
+    'select={',
+    'ja={"美玖が一番似合ってる","スヴェが一番似合ってる","香子が一番似合ってる"},',
+    '},',
+    '},',
+    '},',
+    '}'
+  ].join('\r\n') + '\r\n';
+
+  // Extract in Multi-Lang en mode
+  const exEn = A.extractFromAst(raw, [], { astLang: 'en' });
+  assert.equal(exEn.entryCount, 5);
+  assert.equal(exEn.lines[0], '[0|皐] 「はい。<BR>承知しました」');
+  assert.equal(exEn.lines[1], '[1|スヴェ] 「おはよう」');
+  assert.equal(exEn.lines[2], '[2|Choice] 美玖が一番似合ってる');
+  assert.equal(exEn.lines[3], '[3|Choice] スヴェが一番似合ってる');
+  assert.equal(exEn.lines[4], '[4|Choice] 香子が一番似合ってる');
+
+  // Repack en (with rt2AsSpace=true to also verify no double spaces!)
+  const repEn = A.repackAst(raw, exEn.tagStore, {
+    0: ['Satsuki', '「Yes. <BR> Understood.」'],
+    1: ['Svetlana', '「Good morning.」'],
+    2: ['Choice', 'Miku looks best'],
+    3: ['Choice', 'Sve looks best'],
+    4: ['Choice', 'Kako looks best'],
+  }, 0, '\r\n', true, { astLang: 'en' });
+
+  // CRLF check (no bare LF)
+  assert.equal(repEn.includes('\r\n'), true);
+  assert.equal(repEn.replace(/\r\n/g, '').includes('\n'), false);
+  // No double space from rt2AsSpace
+  assert.equal(repEn.includes('  '), false);
+  // ja preserved intact, en injected
+  assert.match(repEn, /name=\{name="皐",ja="皐",en="Satsuki"\}/);
+  assert.match(repEn, /name=\{name="スヴェトラーナ",ja="スヴェ",en="Svetlana"\}/);
+  assert.equal((repEn.match(/en="Svetlana"/g) || []).length, 2, 'orphanName phonechat sticker also updated cleanly');
+  assert.match(repEn, /「はい。/);
+  assert.match(repEn, /en=\{\r\n\{\r\n"「Yes\. ",\r\n"Understood\.」",\r\n\},\r\n\},/);
+  assert.match(repEn, /select=\{\r\nja=\{\r\n"美玖が一番似合ってる"/);
+  assert.match(repEn, /en=\{\r\n"Miku looks best",\r\n"Sve looks best",\r\n"Kako looks best",\r\n\},/);
+
+  // Re-import Multi-Lang file in en mode: must pre-load existing en translations & stay idempotent!
+  const exEn2 = A.extractFromAst(repEn, [], { astLang: 'en' });
+  assert.equal(exEn2.initialTranslations[0].tgt, '「Yes. Understood.」');
+  assert.equal(exEn2.initialTranslations[0].tgtName, 'Satsuki');
+  assert.equal(exEn2.initialTranslations[2].tgt, 'Miku looks best');
+
+  // Now inject id on top of the en file -> must preserve BOTH ja and en!
+  const exId = A.extractFromAst(repEn, [], { astLang: 'id' });
+  assert.equal(exId.initialTranslations, null);
+  const repId = A.repackAst(repEn, exId.tagStore, {
+    0: ['Satsuki', '「Baik. Mengerti」'],
+    2: ['Choice', 'Miku paling cocok'],
+  }, 0, '\r\n', false, { astLang: 'id' });
+  assert.match(repId, /name=\{name="皐",ja="皐",en="Satsuki",id="Satsuki"\}/);
+  assert.match(repId, /en=\{\r\n"Miku looks best"/);
+  assert.match(repId, /id=\{\r\n"Miku paling cocok"/);
+  // Idempotent update: repacking en again must NOT duplicate en={...}
+  const repEnAgain = A.repackAst(repId, exEn2.tagStore, { 0: ['Satsuki', '「Yes, got it.」'] }, 0, '\r\n', false, { astLang: 'en' });
+  assert.equal((repEnAgain.match(/name=\{name="皐",ja="皐",en="Satsuki",id="Satsuki"\}/g) || []).length, 1);
+  assert.equal((repEnAgain.match(/Yes, got it\./g) || []).length, 1);
+});
+
+t('ast: non-dialog .ast without text={ exports verbatim without error', () => {
+  const brand = 'ast={\r\n{{"video",file="logo.mpg"}},\r\n}\r\n';
+  const ex = A.extractFromAst(brand, [], { astLang: 'en' });
+  assert.equal(ex.entryCount, 0);
+  assert.equal(ex.noText, true);
+  assert.equal(A.repackAst(brand, ex.tagStore, {}, 0, '\r\n', false, { astLang: 'en' }), brand);
+});
+
 console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

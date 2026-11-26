@@ -65,7 +65,7 @@ const S = {
   batchFrom: null, batchStatus: 'todo',
   qcPage: 1, qcFilter: 'all', qcTargetMode: 'polish', qcFrom: 1,
   qcRev: 1, qcCache: null,
-  fileFilter: '', vntpFilter: false, scnLang: 0, onlyTranslatedZip: false,
+  fileFilter: '', vntpFilter: false, scnLang: 0, astLang: 'ja', onlyTranslatedZip: false,
   showVnPreview: lsGet('kopipe.preview') === '1',
   theme: lsGet('kopipe.theme') || 'obsidian',
   collapsedDirs: new Set(), _dirsInit: false, lastSummary: null
@@ -1264,12 +1264,21 @@ async function renderFiles(v) {
     h('option', { value: '2', selected: S.scnLang === 2 }, 'SCN Lang: Slot 2 (CN / Lang 3)'),
     h('option', { value: '3', selected: S.scnLang === 3 }, 'SCN Lang: Slot 3 (Lang 4)')
   );
+  const astLangSel = h('select', {
+    style: 'padding:4px 8px;font-size:12px',
+    title: 'Target language mode for Artemis .ast files (Overwrite ja or Multi-Lang en/id keeping ja intact)',
+    onchange: () => { S.astLang = astLangSel.value || 'ja'; }
+  },
+    h('option', { value: 'ja', selected: S.astLang === 'ja' }, 'AST Lang: Overwrite ja'),
+    h('option', { value: 'en', selected: S.astLang === 'en' }, 'AST Lang: Multi-Lang en'),
+    h('option', { value: 'id', selected: S.astLang === 'id' }, 'AST Lang: Multi-Lang id')
+  );
   const progHolder = h('div');
 
   const input = h('input', { type: 'file', multiple: true, hidden: true, onchange: () => {
     const list = [...input.files]; input.value = '';
     if (!list.length) return;
-    addSingleOrMultiFiles(list, { txtHint: 'auto', vntpFilter: flt.checked, scnLang: S.scnLang });
+    addSingleOrMultiFiles(list, { txtHint: 'auto', vntpFilter: flt.checked, scnLang: S.scnLang, astLang: S.astLang });
   } });
 
   const dirInput = h('input', { type: 'file', webkitdirectory: true, multiple: true, hidden: true, onchange: () => {
@@ -1280,7 +1289,7 @@ async function renderFiles(v) {
     }));
     dirInput.value = '';
     if (!list.length) return;
-    runFolderBatchUI(list, { vntpFilter: flt.checked, scnLang: S.scnLang, dryRun: false }, progHolder);
+    runFolderBatchUI(list, { vntpFilter: flt.checked, scnLang: S.scnLang, astLang: S.astLang, dryRun: false }, progHolder);
   } });
 
   const dryDirInput = h('input', { type: 'file', webkitdirectory: true, multiple: true, hidden: true, onchange: () => {
@@ -1291,7 +1300,7 @@ async function renderFiles(v) {
     }));
     dryDirInput.value = '';
     if (!list.length) return;
-    runFolderBatchUI(list, { vntpFilter: flt.checked, scnLang: S.scnLang, dryRun: true }, progHolder);
+    runFolderBatchUI(list, { vntpFilter: flt.checked, scnLang: S.scnLang, astLang: S.astLang, dryRun: true }, progHolder);
   } });
 
   const drop = h('label', { class: 'drop' }, input,
@@ -1304,9 +1313,9 @@ async function renderFiles(v) {
     const { items, isFolder } = await collectDroppedItems(e.dataTransfer);
     if (!items.length) return;
     if (isFolder || items.length > 3) {
-      await runFolderBatchUI(items, { vntpFilter: flt.checked, scnLang: S.scnLang, dryRun: false }, progHolder);
+      await runFolderBatchUI(items, { vntpFilter: flt.checked, scnLang: S.scnLang, astLang: S.astLang, dryRun: false }, progHolder);
     } else {
-      await addSingleOrMultiFiles(items, { txtHint: 'auto', vntpFilter: flt.checked, scnLang: S.scnLang });
+      await addSingleOrMultiFiles(items, { txtHint: 'auto', vntpFilter: flt.checked, scnLang: S.scnLang, astLang: S.astLang });
     }
   });
 
@@ -1338,6 +1347,7 @@ async function renderFiles(v) {
       h('button', { onclick: () => input.click() }, 'Add Files'),
       h('button', { onclick: () => dryDirInput.click(), title: 'Test all files in a folder and view logs without saving' }, 'Dry-Run Folder'),
       scnLangSel,
+      astLangSel,
       h('label', { class: 'pill-chk', style: 'margin-left:auto', title: 'For VNTP .json files: skip repeated chapter/bookmark labels (3+ occurrences)' }, flt, 'Filter repeated bookmarks (VNTP .json)'),
       fmtBtn,
       dirInput, dryDirInput
@@ -1430,7 +1440,7 @@ async function renderFiles(v) {
             h('span', { class: 'dot ' + dotStatus, title: `Log status: ${dotStatus.toUpperCase()}` }),
             h('b', {}, f.name),
             f.path && f.path !== f.name ? h('span', { class: 'dim', style: 'margin-left:6px' }, f.path) : null,
-            h('div', { class: 'dim' }, `${KIND_LABEL[f.kind] || f.kind} · ${tr}/${f.entryCount} translated` + (f.meta && f.meta.strategy ? ` · ${f.meta.strategy}` : '') + (f.meta && f.meta.scnLangCount > 1 ? ` · Lang ${f.meta.scnLang}/${f.meta.scnLangCount}` : ''))
+            h('div', { class: 'dim' }, `${KIND_LABEL[f.kind] || f.kind} · ${tr}/${f.entryCount} translated` + (f.meta && f.meta.strategy ? ` · ${f.meta.strategy}` : '') + (f.meta && f.meta.scnLangCount > 1 ? ` · Lang ${f.meta.scnLang}/${f.meta.scnLangCount}` : '') + (f.kind === 'ast' && f.meta && f.meta.astLang && f.meta.astLang !== 'ja' ? ` · AST: ${f.meta.astLang}` : ''))
           ),
           h('td', { style: 'text-align:right;white-space:nowrap' },
             h('button', { class: 'sm', onclick: async () => {
@@ -1501,6 +1511,7 @@ async function renderFiles(v) {
             try {
               const r = await P.reparseStoredFiles(store, proj.id, {
                 scnLang: S.scnLang,
+                astLang: S.astLang,
                 onProgress: p => {
                   lbl.textContent = `Re-parsing (${p.index}/${p.total}): ${p.name}`;
                   bar.style.width = `${Math.round((p.index / p.total) * 100)}%`;
